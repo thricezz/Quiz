@@ -155,6 +155,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
 <div class="toast" id="toast" hidden></div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 // ---------- question bank: [category, question, right, wrong, wrong, wrong] ----------
@@ -243,6 +244,22 @@ const MODES={
   duel:{name:"1v1 Duel",tag:"Head to head, first to 5",rules:"Two players go head to head while everyone else watches. Fastest right answer takes the point. First to 5 wins."}
 };
 const MAIN=10,DUEL_TARGET=5,TIMERS=[10,15,20,30],PREFIX="officequiznight-";
+// Backup route: public MQTT-over-WebSocket relays. Everyone connects to all of them; duplicates are ignored.
+const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt"],TOPIC="officequiznight26/";
+function relayConnect(subTopics,onMsg){
+  const list=[];
+  if(!window.mqtt)return list;
+  BROKERS.forEach(url=>{try{
+    const c=mqtt.connect(url,{clientId:"oqn_"+Math.random().toString(36).slice(2,12),reconnectPeriod:4000,connectTimeout:10000,clean:true,keepalive:30});
+    c.on("connect",()=>subTopics.forEach(t=>c.subscribe(t)));
+    c.on("message",(t,buf)=>{let d;try{d=JSON.parse(buf.toString())}catch(e){return}onMsg(d,t)});
+    c.on("error",()=>{});
+    list.push(c);
+  }catch(e){}});
+  return list;
+}
+function relayPub(list,topic,obj){const s=JSON.stringify(obj);list.forEach(c=>{try{if(c.connected)c.publish(topic,s)}catch(e){}})}
+function relayEnd(list){list.forEach(c=>{try{c.end(true)}catch(e){}})}
 
 // ---------- shared helpers ----------
 const $=s=>document.querySelector(s);
@@ -255,7 +272,7 @@ let toastT;function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;
 function genCode(){const L="ABCDEFGHJKLMNPQRSTUVWXYZ";let s="";for(let i=0;i<4;i++)s+=L[Math.floor(Math.random()*L.length)];return s}
 function tiles(c){return `<div class="tiles" aria-label="Room code ${c}">${c.split("").map(ch=>`<div class="tile">${ch}</div>`).join("")}</div>`}
 function joinUrl(code){return location.origin+location.pathname+"?room="+code}
-const libsOk=()=>typeof window.Peer==="function";
+const libsOk=()=>typeof window.Peer==="function"||!!window.mqtt;
 
 let role=null; // null | 'host' | 'player'
 let S=null;    // public game state (host builds it, players receive it)
@@ -281,7 +298,18 @@ function boardHTML(showDelta,limit,me){
 }
 
 // ================= HOST =================
-let hostPeer=null,room=null,P={},hostLive=false,hostT={},wake=null;
+let hostPeer=null,room=null,P={},hostLive=false,hostT={},wake=null,hostRelay=[],seq=0,epoch=Date.now(),hostPulse=null;
+const isOn=p=>!!(p&&((p.conn&&p.conn.open)||Date.now()-(p.mqSeen||0)<15000));
+function hostRelayStart(){
+  relayEnd(hostRelay);
+  hostRelay=relayConnect([TOPIC+room.code+"/up"],d=>onHostData(null,d));
+  clearInterval(hostPulse);
+  hostPulse=setInterval(()=>{ // re-send state over the relay and notice players who dropped
+    if(!room)return;
+    let flip=false;for(const id in P){const on=isOn(P[id]);if(on!==P[id].online){P[id].online=on;flip=true}}
+    if(flip)changed();else if(S)relayPub(hostRelay,TOPIC+room.code+"/down",{t:"state",s:S});
+  },4000);
+}
 
 function newRoom(){return{code:genCode(),status:"lobby",mode:"classic",timer:20,cats:CATS.slice(),custom:"",auto:true,gameNo:0,duelPick:[]}}
 function startHost(resume){
@@ -291,7 +319,9 @@ function startHost(resume){
   if(saved){room=saved.room;P=saved.P||{};Object.values(P).forEach(p=>{p.online=false;p.conn=null})}
   else{room=newRoom();P={}}
   if(room.status==="question")room.qStartedAt=Date.now(); // give everyone a fresh clock after a reload
-  openHostPeer(0,!saved);requestWake();changed();
+  epoch=Date.now();seq=0;
+  if(window.Peer)openHostPeer(0,!saved);else hostLive=true;
+  hostRelayStart();requestWake();changed();
 }
 function openHostPeer(tries,fresh){
   hostLive=false;
@@ -299,14 +329,14 @@ function openHostPeer(tries,fresh){
   hostPeer.on("open",()=>{hostLive=true;render()});
   hostPeer.on("connection",c=>{
     c.on("data",d=>onHostData(c,d));
-    c.on("close",()=>{for(const id in P){if(P[id].conn===c){P[id].conn=null;P[id].online=false;changed()}}});
+    c.on("close",()=>{for(const id in P){if(P[id].conn===c){P[id].conn=null;P[id].online=isOn(P[id]);changed()}}});
   });
   hostPeer.on("disconnected",()=>{hostLive=false;render();setTimeout(()=>{try{if(hostPeer&&!hostPeer.destroyed)hostPeer.reconnect()}catch(e){}},1500)});
   hostPeer.on("error",e=>{
     if(e.type==="unavailable-id"){hostPeer.destroy();
-      if(fresh){room.code=genCode();openHostPeer(0,true)}
+      if(fresh){room.code=genCode();hostRelayStart();openHostPeer(0,true)}
       else if(tries<10)setTimeout(()=>openHostPeer(tries+1,false),3000);
-      else{toast("Couldn't reclaim the room code. Starting a fresh room.");room.code=genCode();openHostPeer(0,true)}
+      else{hostLive=true;toast("Direct links are busy for this code. Players will connect through the relay.")}
       render();return}
     if(["network","server-error","socket-error","socket-closed"].includes(e.type)){hostLive=false;render()}
   });
@@ -315,17 +345,22 @@ function requestWake(){try{navigator.wakeLock&&navigator.wakeLock.request("scree
 document.addEventListener("visibilitychange",()=>{if(role==="host"&&document.visibilityState==="visible")requestWake()});
 
 function onHostData(c,d){
-  if(!d||typeof d!=="object")return;
+  if(!d||typeof d!=="object"||!room)return;
+  const id=String(d.id||"").slice(0,40);if(!id)return;
   if(d.t==="join"){
-    const id=String(d.id||"").slice(0,40);if(!id)return;
     const name=String(d.name||"Player").trim().slice(0,16)||"Player";
-    if(P[id]){P[id].name=name;P[id].conn=c;P[id].online=true}
-    else P[id]={name,joinedAt:Date.now(),answers:{},conn:c,online:true};
-    changed();return;
+    const p=P[id]||(P[id]={name,joinedAt:Date.now(),answers:{},conn:null});
+    const wasOn=p.online,oldName=p.name;p.name=name;
+    if(c)p.conn=c;else p.mqSeen=Date.now();
+    p.online=true;
+    if(!wasOn||oldName!==name||c)changed();else relayPub(hostRelay,TOPIC+room.code+"/down",{t:"state",s:S});
+    return;
   }
+  if(!P[id])return;
+  if(c)P[id].conn=c;else P[id].mqSeen=Date.now();
+  if(!P[id].online){P[id].online=true;changed()}
   if(d.t==="ans"){
-    let id=null;for(const k in P)if(P[k].conn===c)id=k;
-    const k=qk();if(!id||room.status!=="question"||d.k!==k||!(room.alive||[]).includes(id)||P[id].answers[k])return;
+    const k=qk();if(room.status!=="question"||d.k!==k||!(room.alive||[]).includes(id)||P[id].answers[k])return;
     const n=room.questions[room.qIndex].o.length,ci=d.c|0;if(ci<0||ci>=n)return;
     P[id].answers[k]={c:ci,ms:Math.max(0,Math.min(+d.ms||0,room.timer*1000))};
     changed();
@@ -335,7 +370,7 @@ function qk(){return `g${room.gameNo}q${room.qIndex}`}
 function pub(){
   const reveal=room.status==="reveal"||room.status==="done";
   const q=room.questions&&room.questions[room.qIndex],k=qk();
-  return{code:room.code,status:room.status,mode:room.mode,timer:room.timer,k,qIndex:room.qIndex||0,round:room.round||0,mainCount:room.mainCount||0,phase:room.phase,tb:room.tb||0,
+  return{seq:++seq,epoch,code:room.code,status:room.status,mode:room.mode,timer:room.timer,k,qIndex:room.qIndex||0,round:room.round||0,mainCount:room.mainCount||0,phase:room.phase,tb:room.tb||0,
     q:q?{q:q.q,o:q.o,cat:q.cat,a:reveal?q.a:null}:null,
     alive:room.alive||[],active:room.active||[],scores:room.scores||{},outRound:room.outRound||{},results:reveal?room.results:null,events:room.events||[],final:!!room.final,winners:room.winners||null,
     players:Object.fromEntries(Object.entries(P).map(([id,p])=>[id,{n:p.name,on:!!p.online,j:p.joinedAt}])),
@@ -345,6 +380,7 @@ function changed(){
   S=pub();
   try{lsSet("qn_host",JSON.stringify({room,P:Object.fromEntries(Object.entries(P).map(([id,p])=>[id,{name:p.name,joinedAt:p.joinedAt,answers:p.answers}])),at:Date.now()}))}catch(e){}
   for(const id in P){const c=P[id].conn;if(c&&c.open){try{c.send({t:"state",s:S})}catch(e){}}}
+  relayPub(hostRelay,TOPIC+room.code+"/down",{t:"state",s:S});
   hostTick();render();
 }
 function set(patch){Object.assign(room,patch);changed()}
@@ -422,6 +458,8 @@ function nextQ(){if(room.status!=="reveal")return;clearTimeout(hostT.r);
   set({status:"question",qIndex:room.qIndex+1,round:room.round+1,qStartedAt:Date.now(),results:null,events:[]})}
 function endHost(){
   for(const id in P){try{P[id].conn&&P[id].conn.send({t:"closed"})}catch(e){}}
+  relayPub(hostRelay,TOPIC+room.code+"/down",{t:"closed"});
+  clearInterval(hostPulse);setTimeout((l=>()=>relayEnd(l))(hostRelay),800);hostRelay=[];
   try{hostPeer&&hostPeer.destroy()}catch(e){}
   Object.values(hostT).forEach(v=>clearTimeout(v));hostT={};lsDel("qn_host");role=null;room=null;P={};S=null;render();
 }
@@ -493,48 +531,71 @@ function hostDock(){
 }
 
 // ================= PLAYER =================
-let pPeer=null,pConn=null,pCode="",pState="idle",myId=null,myName="",seen={k:null,t:0},picks={},expiredKey=null,connTimer=null,retryT=null;
+let pPeer=null,pConn=null,pRelay=[],pCode="",myId=null,myName="",seen={k:null,t:0},picks={},expiredKey=null,connTimer=null,retryT=null,pPulse=null,lastMsg=0;
 myId=lsGet("qn_pid");if(!myId){myId="p"+Math.random().toString(36).slice(2,11);lsSet("qn_pid",myId)}
+const pLive=()=>!!((pConn&&pConn.open)||Date.now()-lastMsg<12000);
 
+function pSend(obj){
+  obj.id=myId;
+  if(pConn&&pConn.open){try{pConn.send(obj)}catch(e){}}
+  relayPub(pRelay,TOPIC+pCode+"/up",obj);
+}
+function onPlayerData(d){
+  if(!d||role!=="player")return;
+  lastMsg=Date.now();
+  if(d.t==="state"&&d.s){
+    const s=d.s;
+    if(S&&s.epoch<S.epoch)return;
+    if(S&&s.epoch===S.epoch&&s.seq<=S.seq){render();return}
+    S=s;clearTimeout(connTimer);
+    if(S.status==="question"&&seen.k!==S.k){seen={k:S.k,t:performance.now()}}
+    if(!S.players[myId])pSend({t:"join",name:myName});
+    render();
+  }
+  if(d.t==="closed")leavePlayer("The host ended the room.");
+  if(d.t==="kicked"&&d.id===myId)leavePlayer("The host removed you from the room.");
+}
 function joinAsPlayer(code){
-  if(!libsOk()){homeErr="Couldn't load the connection library. Check your internet and reload.";render();return}
-  role="player";pCode=code;myName=homeName;pState="connecting";S=null;lsSet("qn_last",code);render();
-  pPeer=new Peer();
-  pPeer.on("open",dial);
-  pPeer.on("disconnected",()=>{setTimeout(()=>{try{pPeer&&!pPeer.destroyed&&pPeer.reconnect()}catch(e){}},1500)});
-  pPeer.on("error",e=>{
-    if(e.type==="peer-unavailable"){
-      if(!S){leavePlayer(`No room with code ${code} is open right now. Check the code on the TV.`)}
-      else{pState="reconnecting";render();clearTimeout(retryT);retryT=setTimeout(dial,3000)}
-    }else if(!S&&["network","server-error","socket-error","browser-incompatible"].includes(e.type)){leavePlayer("Couldn't connect. Check your internet and try again.")}
-  });
-  clearTimeout(connTimer);connTimer=setTimeout(()=>{if(role==="player"&&!S)leavePlayer("Couldn't reach the room. If you're on office Wi-Fi, try mobile data.")},15000);
+  if(!libsOk()){homeErr="Couldn't load the game. Check your internet and reload.";render();return}
+  role="player";pCode=code;myName=homeName;S=null;lastMsg=0;lsSet("qn_last",code);render();
+  // route 1: relay (works on almost any network)
+  pRelay=relayConnect([TOPIC+code+"/down"],onPlayerData);
+  pRelay.forEach(c=>c.on("connect",()=>pSend({t:"join",name:myName})));
+  clearInterval(pPulse);pPulse=setInterval(()=>{if(role!=="player")return;pSend({t:S?"ping":"join",name:myName});render()},5000);
+  // route 2: direct phone-to-phone (faster when the network allows it)
+  if(window.Peer){try{
+    pPeer=new Peer();
+    pPeer.on("open",dial);
+    pPeer.on("disconnected",()=>{setTimeout(()=>{try{pPeer&&!pPeer.destroyed&&pPeer.reconnect()}catch(e){}},2000)});
+    pPeer.on("error",e=>{if(e.type==="peer-unavailable"){clearTimeout(retryT);retryT=setTimeout(dial,8000)}});
+  }catch(e){}}
+  clearTimeout(connTimer);connTimer=setTimeout(()=>{if(role==="player"&&!S)leavePlayer(`Couldn't find room ${code}. Check the code on the TV and make sure the host's screen is on.`)},20000);
 }
 function dial(){
   if(role!=="player"||!pPeer||pPeer.destroyed)return;
   try{pConn&&pConn.close()}catch(e){}
   pConn=pPeer.connect(PREFIX+pCode,{reliable:true});
-  pConn.on("open",()=>{pState="live";pConn.send({t:"join",id:myId,name:myName});render()});
-  pConn.on("data",d=>{
-    if(!d)return;
-    if(d.t==="state"){S=d.s;if(S.status==="question"&&seen.k!==S.k){seen={k:S.k,t:performance.now()}}render()}
-    if(d.t==="closed")leavePlayer("The host ended the room.");
-  });
-  pConn.on("close",()=>{if(role==="player"){pState="reconnecting";render();clearTimeout(retryT);retryT=setTimeout(dial,2000)}});
+  pConn.on("open",()=>{pSend({t:"join",name:myName});render()});
+  pConn.on("data",onPlayerData);
+  pConn.on("close",()=>{if(role==="player"){render();clearTimeout(retryT);retryT=setTimeout(dial,4000)}});
 }
 function leavePlayer(msg){
-  clearTimeout(connTimer);clearTimeout(retryT);role=null;S=null;
+  clearTimeout(connTimer);clearTimeout(retryT);clearInterval(pPulse);role=null;S=null;
   try{pConn&&pConn.close()}catch(e){}try{pPeer&&pPeer.destroy()}catch(e){}pPeer=null;pConn=null;
+  relayEnd(pRelay);pRelay=[];
   homeErr=msg||"";render();
 }
 function pTimeLeft(){return S?Math.max(0,S.timer*1000-(performance.now()-seen.t)):0}
 function canAnswer(){return S&&S.status==="question"&&S.alive.includes(myId)&&picks[S.k]==null&&!S.answered.includes(myId)&&pTimeLeft()>0}
 function answer(i){
-  if(!canAnswer()||!pConn||!pConn.open){if(pState!=="live")toast("Reconnecting… try again in a second.");return}
-  const ms=Math.round(performance.now()-seen.t);picks[S.k]=i;pConn.send({t:"ans",k:S.k,c:i,ms});render();
+  if(!canAnswer())return;
+  if(!pLive()){toast("Reconnecting… try again in a second.");return}
+  const ms=Math.round(performance.now()-seen.t),k=S.k;picks[k]=i;render();
+  const msg={t:"ans",k,c:i,ms};pSend(msg);
+  setTimeout(()=>{if(S&&S.k===k&&S.status==="question"&&!S.answered.includes(myId))pSend({...msg})},1500); // resend once in case it got lost
 }
 
-function pHeader(){return `<div class="top"><div class="brand"><div class="bulb">?</div><h1>Quiz Night</h1></div><span class="conn ${pState==="live"?"":"warn"}">${pState==="live"?esc(myName)+" · "+esc(pCode):"Reconnecting…"}</span></div>`}
+function pHeader(){return `<div class="top"><div class="brand"><div class="bulb">?</div><h1>Quiz Night</h1></div><span class="conn ${pLive()?"":"warn"}">${pLive()?esc(myName)+" · "+esc(pCode):"Reconnecting…"}</span></div>`}
 function playerScreen(){
   if(!S)return `<div class="wrap">${pHeader()}<div class="status">Joining room ${esc(pCode)}…</div></div>`;
   const inGame=S.active.includes(myId),alive=S.alive.includes(myId);
@@ -638,7 +699,7 @@ document.addEventListener("click",e=>{
   else if(a==="cat")set({cats:room.cats.includes(v)?room.cats.filter(x=>x!==v):[...room.cats,v]});
   else if(a==="auto")set({auto:!room.auto});
   else if(a==="pick"){let p=room.duelPick.slice();p=p.includes(v)?p.filter(x=>x!==v):[...p,v].slice(-2);set({duelPick:p})}
-  else if(a==="kick"){const p=P[v];if(p){try{p.conn&&p.conn.send({t:"closed"});p.conn&&p.conn.close()}catch(err){}delete P[v];room.duelPick=room.duelPick.filter(x=>x!==v);changed()}}
+  else if(a==="kick"){const p=P[v];if(p){try{p.conn&&p.conn.send({t:"closed"});p.conn&&p.conn.close()}catch(err){}relayPub(hostRelay,TOPIC+room.code+"/down",{t:"kicked",id:v});delete P[v];room.duelPick=room.duelPick.filter(x=>x!==v);changed()}}
   else if(a==="start")startGame();
   else if(a==="close")closeQ(qk());
   else if(a==="next")nextQ();
