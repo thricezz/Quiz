@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Quiz Night</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Game-show look, single dark theme (it's going on a TV). Host = big TV layout; players = thumb-sized answer pad. */
+:root{
+  --bg:#0E1016; --surface:#181B24; --soft:#20242F; --ink:#F1F2F6; --muted:#9BA1B4; --line:#2C3140;
+  --accent:#FFC23D; --accent-ink:#14161D; --good:#3DC98A; --bad:#FF6E6E;
+  --a:#D9482A; --b:#2A60D4; --c:#13814F; --d:#7642C7;
+  --display:'Archivo Black','Arial Black',Impact,sans-serif;
+  --body:'Figtree',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.45;
+  padding:calc(env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) calc(110px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:18px;padding-top:18px}
+.tv{max-width:1280px;margin:0 auto;display:flex;flex-direction:column;gap:clamp(12px,2.2vw,28px);padding-top:clamp(12px,2vw,28px)}
+h1,h2,h3{font-family:var(--display);font-weight:400;margin:0;text-wrap:balance}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+img,canvas{max-width:100%}
+[hidden]{display:none!important}
+
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px}
+.bulb{width:34px;height:34px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-family:var(--display);color:var(--accent-ink);font-size:18px;box-shadow:0 0 0 4px rgba(255,194,61,.25)}
+.brand h1{font-size:20px}
+.ghost{background:none;border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:14px;color:var(--muted)}
+.label{font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.field{display:flex;flex-direction:column;gap:6px}
+input[type=text],textarea{width:100%;font:inherit;font-size:17px;padding:12px 14px;border-radius:10px;border:1.5px solid var(--line);background:var(--soft);color:var(--ink)}
+textarea{font-size:14px;min-height:110px;font-family:var(--mono);resize:vertical}
+.codein{font-family:var(--mono)!important;font-size:24px!important;letter-spacing:.4em;text-transform:uppercase;text-align:center}
+.btn{border:0;border-radius:12px;padding:14px 18px;font-weight:700;font-size:16px;background:var(--ink);color:var(--bg)}
+.btn.hot{background:var(--accent);color:var(--accent-ink)}
+.btn.line{background:transparent;border:1.5px solid var(--line);color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.err{color:var(--bad);font-weight:600;font-size:14px;margin:0}
+.hint{color:var(--muted);font-size:14px;margin:0}
+.tag{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:99px;background:var(--line);color:var(--muted);white-space:nowrap}
+.tag.you,.tag.win{background:var(--accent);color:var(--accent-ink)}
+.tag.out{background:rgba(255,110,110,.18);color:var(--bad)}
+
+/* code tiles */
+.tiles{display:flex;gap:clamp(6px,1vw,12px)}
+.tile{width:clamp(52px,7vw,92px);aspect-ratio:4/5;border-radius:8px;background:#05060A;color:var(--accent);font-family:var(--mono);font-weight:700;font-size:clamp(34px,5vw,64px);display:grid;place-items:center;position:relative;border:1px solid var(--line)}
+.tile::after{content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:rgba(14,16,22,.7)}
+
+/* lobby (TV) */
+.lobby{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:clamp(14px,2.5vw,32px);align-items:start}
+.joinbox{display:flex;flex-direction:column;gap:14px;align-items:flex-start}
+.joinrow{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.qr{background:#fff;padding:10px;border-radius:12px;line-height:0}
+.qr img,.qr canvas{width:clamp(120px,14vw,190px)!important;height:auto!important}
+.url{font-family:var(--mono);font-size:clamp(13px,1.4vw,18px);word-break:break-all;color:var(--ink)}
+.pgrid{display:flex;flex-wrap:wrap;gap:8px}
+.pchip{display:flex;align-items:center;gap:8px;background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:8px 8px 8px 14px;font-weight:700;font-size:clamp(14px,1.5vw,19px);max-width:100%;min-width:0}
+.pchip .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip.off{opacity:.45}
+.x{border:0;background:none;color:var(--muted);font-size:18px;padding:0 6px;line-height:1}
+.pick{border:1.5px solid var(--line);background:var(--surface);border-radius:99px;font-size:12px;font-weight:700;padding:3px 10px}
+.pick[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1.5px solid var(--line);background:var(--soft);border-radius:999px;padding:7px 13px;font-size:14px;font-weight:600}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mode{text-align:left;border:1.5px solid var(--line);background:var(--soft);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.mode b{font-family:var(--display);font-weight:400;font-size:16px}
+.mode span{font-size:13px;color:var(--muted)}
+.mode[aria-pressed=true]{border-color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:600;font-size:15px;background:none;border:0;padding:4px 0;text-align:left;width:100%}
+.sw{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:none}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--ink);transition:transform .15s}
+.toggle[aria-pressed=true] .sw{background:var(--good)}
+.toggle[aria-pressed=true] .sw::after{transform:translateX(18px)}
+details summary{cursor:pointer;font-weight:700;font-size:15px}
+
+/* question (TV) */
+.qmeta{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.qnum{font-family:var(--display);font-size:clamp(15px,2vw,26px)}
+.timer{display:flex;align-items:center;gap:12px}
+.track{flex:1;height:clamp(10px,1.2vw,16px);border-radius:99px;background:var(--line);overflow:hidden}
+.bar{height:100%;width:100%;background:var(--accent);transform-origin:left;transition:transform .1s linear}
+.bar.low{background:var(--bad)}
+.secs{font-family:var(--mono);font-weight:700;font-size:clamp(22px,3vw,44px);min-width:2.2ch;text-align:right;font-variant-numeric:tabular-nums}
+.qtext{font-family:var(--display);font-size:clamp(24px,4.4vw,60px);line-height:1.15;margin:0;text-wrap:balance}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:clamp(10px,1.4vw,18px)}
+.opt{border:0;border-radius:14px;padding:clamp(14px,1.8vw,26px);min-height:clamp(84px,11vw,150px);color:#fff;font-weight:700;font-size:clamp(17px,2.4vw,34px);text-align:left;display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-width:0;overflow-wrap:anywhere;transition:transform .08s,opacity .2s}
+.opt:active:not(:disabled){transform:scale(.97)}
+.opt .lt{font-family:var(--mono);font-size:.55em;opacity:.85;display:flex;justify-content:space-between;gap:8px}
+.o0{background:var(--a)}.o1{background:var(--b)}.o2{background:var(--c)}.o3{background:var(--d)}
+.opt:disabled{cursor:default}
+.opt.dim{opacity:.3}
+.opt.mine{box-shadow:0 0 0 4px var(--bg),0 0 0 7px var(--ink)}
+.opt.right{box-shadow:0 0 0 4px var(--bg),0 0 0 8px var(--good)}
+.opt .who{font-size:.5em;font-weight:600}
+.dots{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.dot{font-size:clamp(13px,1.3vw,17px);font-weight:600;padding:4px 12px;border-radius:99px;border:1.5px dashed var(--line);color:var(--muted)}
+.dot.in{border-style:solid;border-color:var(--accent);color:var(--ink)}
+.status{text-align:center;font-weight:700;font-size:17px;padding:14px;border-radius:12px;background:var(--surface);border:1px solid var(--line)}
+
+/* reveal / results */
+.split{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:clamp(14px,2.5vw,32px);align-items:start}
+.events{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.events li{font-weight:700;padding:10px 14px;border-radius:10px;background:rgba(255,194,61,.16);font-size:clamp(15px,1.6vw,20px)}
+.board{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:clamp(15px,1.6vw,21px)}
+.board td{padding:10px 6px;border-bottom:1px solid var(--line)}
+.board .rk{font-family:var(--mono);color:var(--muted);width:2.2em}
+.board .sc{text-align:right;font-family:var(--mono);font-weight:700;white-space:nowrap}
+.board .dl{text-align:right;font-family:var(--mono);font-size:.8em;color:var(--good);width:4.5em}
+.board .nmc{font-weight:700;max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.board tr.isout td{opacity:.5}
+.winner{text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center;padding:clamp(20px,3vw,40px) 16px;border-radius:18px;background:#05060A;border:1px solid var(--line);color:var(--accent)}
+.winner h2{font-size:clamp(30px,7vw,84px);overflow-wrap:anywhere}
+.verdict{text-align:center;display:flex;flex-direction:column;gap:4px;padding:18px;border-radius:16px;background:var(--surface);border:1px solid var(--line)}
+.verdict .big{font-family:var(--display);font-size:36px;line-height:1.1}
+.verdict.good .big{color:var(--good)}
+.verdict.bad .big{color:var(--bad)}
+.rankline{font-family:var(--display);font-size:22px;text-align:center}
+
+/* player pad */
+.pad{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pad .opt{min-height:120px;font-size:18px}
+.conn{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.conn::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--good)}
+.conn.warn::before{background:var(--bad)}
+
+/* host dock */
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);
+  padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.dock .in{max-width:1280px;margin:0 auto;display:flex;align-items:center;gap:12px}
+.dock .info{flex:1;min-width:0;font-size:14px;color:var(--muted)}
+.dock .info b{color:var(--ink)}
+.dock .btn{flex:none;padding:12px 16px}
+.toast{position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;font-size:14px;z-index:40;max-width:calc(100% - 32px)}
+@media (max-width:760px){.lobby,.split{grid-template-columns:1fr}}
+@media (max-width:380px){.opt{font-size:16px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="dock" id="dock" hidden><div class="in" id="dockIn"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+// ---------- question bank: [category, question, right, wrong, wrong, wrong] ----------
+const BANK = [
+["General","How many sides does a hexagon have?","6","5","7","8"],
+["General","Which letter doesn't appear in any U.S. state name?","Q","Z","X","J"],
+["General","How many minutes are in a day?","1,440","1,240","1,600","1,480"],
+["General","Which king in a standard deck of cards has no moustache?","King of Hearts","King of Spades","King of Clubs","King of Diamonds"],
+["General","What colour is an airplane's \"black box\" flight recorder?","Orange","Black","Red","Yellow"],
+["General","How many keys does a standard piano have?","88","76","92","100"],
+["General","How many dots are on a standard six-sided die in total?","21","18","24","20"],
+["General","What is the smallest prime number?","2","1","3","0"],
+["General","How many hours are in a week?","168","144","172","160"],
+["General","In Roman numerals, what is L?","50","100","500","5"],
+["General","How many zeros are in one million?","6","5","7","9"],
+["Science","What is the chemical symbol for gold?","Au","Ag","Gd","Go"],
+["Science","Which gas do plants absorb from the air?","Carbon dioxide","Oxygen","Nitrogen","Hydrogen"],
+["Science","How many bones are in the adult human body?","206","196","212","226"],
+["Science","What is the hardest natural substance?","Diamond","Quartz","Titanium","Granite"],
+["Science","Roughly how fast does light travel?","300,000 km/s","150,000 km/s","30,000 km/s","1,000,000 km/s"],
+["Science","What is the largest planet in our solar system?","Jupiter","Saturn","Neptune","Uranus"],
+["Science","At sea level, water boils at what temperature in Fahrenheit?","212°F","200°F","180°F","220°F"],
+["Science","Which organ produces insulin?","Pancreas","Liver","Kidney","Spleen"],
+["Science","What is the most abundant gas in Earth's atmosphere?","Nitrogen","Oxygen","Carbon dioxide","Argon"],
+["Science","Which blood type is the universal donor?","O negative","AB positive","A negative","O positive"],
+["Science","Which planet is closest to the sun?","Mercury","Venus","Mars","Earth"],
+["Science","What part of the cell is known as its powerhouse?","Mitochondria","Nucleus","Ribosome","Golgi body"],
+["Geography","What is the capital of Australia?","Canberra","Sydney","Melbourne","Perth"],
+["Geography","Which country has the most natural lakes?","Canada","Russia","United States","Finland"],
+["Geography","Which is Canada's largest province by area?","Quebec","Ontario","British Columbia","Alberta"],
+["Geography","What is the smallest country in the world?","Vatican City","Monaco","San Marino","Liechtenstein"],
+["Geography","What is the largest hot desert on Earth?","Sahara","Arabian","Gobi","Kalahari"],
+["Geography","Mount Everest sits on the border of Nepal and which country?","China","India","Bhutan","Pakistan"],
+["Geography","Which U.S. state is the largest by area?","Alaska","Texas","California","Montana"],
+["Geography","What is the capital of New Zealand?","Wellington","Auckland","Christchurch","Queenstown"],
+["Geography","Counting its territories, which country spans the most time zones?","France","Russia","United States","United Kingdom"],
+["Geography","Which is the largest ocean?","Pacific","Atlantic","Indian","Arctic"],
+["Geography","Which Great Lake lies entirely within the United States?","Lake Michigan","Lake Superior","Lake Huron","Lake Erie"],
+["Geography","What is the capital of Turkey?","Ankara","Istanbul","Izmir","Antalya"],
+["History","In what year did the Titanic sink?","1912","1905","1915","1921"],
+["History","Who was the first person to walk on the moon?","Neil Armstrong","Buzz Aldrin","Yuri Gagarin","John Glenn"],
+["History","In what year did the Berlin Wall fall?","1989","1991","1985","1979"],
+["History","Who was Canada's first prime minister?","John A. Macdonald","Wilfrid Laurier","Alexander Mackenzie","Robert Borden"],
+["History","In what year did Canadian Confederation happen?","1867","1776","1812","1901"],
+["History","Which ancient wonder is still standing?","Great Pyramid of Giza","Colossus of Rhodes","Lighthouse of Alexandria","Hanging Gardens of Babylon"],
+["History","Which civilization built Machu Picchu?","Inca","Aztec","Maya","Olmec"],
+["History","In what year did World War II end?","1945","1944","1946","1943"],
+["History","Who painted the Mona Lisa?","Leonardo da Vinci","Michelangelo","Raphael","Botticelli"],
+["History","Which ship carried the Pilgrims to America in 1620?","Mayflower","Santa María","Endeavour","Beagle"],
+["Sports","How many players per team are on the ice in hockey, including the goalie?","6","5","7","8"],
+["Sports","Which team has won the most Stanley Cups?","Montreal Canadiens","Toronto Maple Leafs","Detroit Red Wings","Boston Bruins"],
+["Sports","Who invented basketball?","James Naismith","Walter Camp","Abner Doubleday","Phil Knight"],
+["Sports","How many points is an NFL touchdown worth before the extra point?","6","7","3","5"],
+["Sports","How long is a marathon?","42.195 km","40 km","26.2 km","50 km"],
+["Sports","Which tennis Grand Slam is played on clay?","French Open","Wimbledon","US Open","Australian Open"],
+["Sports","What is a perfect score in ten-pin bowling?","300","250","200","350"],
+["Sports","How many rings are on the Olympic flag?","5","4","6","7"],
+["Sports","In what year did the Toronto Raptors win the NBA title?","2019","2018","2020","2016"],
+["Sports","How many holes are played in a standard round of golf?","18","9","12","21"],
+["Sports","In baseball, how many balls make a walk?","4","3","5","6"],
+["Screen & Music","Which band recorded \"Bohemian Rhapsody\"?","Queen","The Who","Led Zeppelin","Pink Floyd"],
+["Screen & Music","How many books are in the main Harry Potter series?","7","6","8","5"],
+["Screen & Music","Which TV show is set at the paper company Dunder Mifflin?","The Office","Parks and Recreation","Superstore","30 Rock"],
+["Screen & Music","What is the name of the coffee shop in Friends?","Central Perk","Java Joe's","Monk's Café","The Grind"],
+["Screen & Music","Who directed Jaws?","Steven Spielberg","George Lucas","Ridley Scott","James Cameron"],
+["Screen & Music","Which company created Super Mario?","Nintendo","Sega","Sony","Atari"],
+["Screen & Music","In The Lion King, who is Simba's father?","Mufasa","Scar","Rafiki","Zazu"],
+["Screen & Music","How many strings does a standard violin have?","4","5","6","3"],
+["Screen & Music","Which city were The Beatles from?","Liverpool","London","Manchester","Birmingham"],
+["Screen & Music","Which planet is Superman from?","Krypton","Mongo","Thanagar","Oa"],
+["Food","Which country did poutine come from?","Canada","France","Belgium","United States"],
+["Food","Which nut is used to make marzipan?","Almond","Cashew","Hazelnut","Pistachio"],
+["Food","Which spice gives paella its yellow colour?","Saffron","Turmeric","Paprika","Cumin"],
+["Food","Which of these peppers is the hottest?","Carolina Reaper","Jalapeño","Habanero","Serrano"],
+["Food","Which fruit carries its seeds on the outside?","Strawberry","Raspberry","Kiwi","Blueberry"],
+["Food","Traditional mozzarella is made from which animal's milk?","Water buffalo","Goat","Sheep","Camel"],
+["Food","What is the main ingredient in guacamole?","Avocado","Lime","Pea","Tomatillo"],
+["Food","What is sushi rice seasoned with?","Rice vinegar","Soy sauce","Sesame oil","Lime juice"],
+["Food","What is Tim Hortons' bite-sized doughnut called?","Timbit","Donette","Munchkin","Holey"]
+];
+const CATS=["General","Science","Geography","History","Sports","Screen & Music","Food"];
+const MODES={
+  classic:{name:"Classic",tag:"10 questions, speed scores",rules:"Ten questions for everyone. A right answer scores up to 1,000 points, and faster answers score more. Tied at the top? Sudden-death tiebreaker: fastest right answer wins."},
+  survivor:{name:"Survivor",tag:"One miss and you're out",rules:"Get one wrong, or run out of time, and you're out. If everyone still in misses the same question, everyone survives it. Last one standing wins."},
+  elimination:{name:"Elimination",tag:"Lowest score drops each round",rules:"Everyone scores speed points each round. After every question, the lowest total is knocked out. Last one standing wins."},
+  duel:{name:"1v1 Duel",tag:"Head to head, first to 5",rules:"Two players go head to head while everyone else watches. Fastest right answer takes the point. First to 5 wins."}
+};
+const MAIN=10,DUEL_TARGET=5,TIMERS=[10,15,20,30],PREFIX="officequiznight-";
+
+// ---------- shared helpers ----------
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const lsGet=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+const lsDel=k=>{try{localStorage.removeItem(k)}catch(e){}};
+const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
+let toastT;function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,3500)}
+function genCode(){const L="ABCDEFGHJKLMNPQRSTUVWXYZ";let s="";for(let i=0;i<4;i++)s+=L[Math.floor(Math.random()*L.length)];return s}
+function tiles(c){return `<div class="tiles" aria-label="Room code ${c}">${c.split("").map(ch=>`<div class="tile">${ch}</div>`).join("")}</div>`}
+function joinUrl(code){return location.origin+location.pathname+"?room="+code}
+const libsOk=()=>typeof window.Peer==="function";
+
+let role=null; // null | 'host' | 'player'
+let S=null;    // public game state (host builds it, players receive it)
+const nm=id=>(S&&S.players[id]&&S.players[id].n)||"Someone";
+const names=ids=>ids.map(nm).join(", ");
+
+function qLabel(){
+  if(S.phase==="tiebreak")return `Tiebreaker ${S.tb+1}`;
+  if(S.mode==="classic")return `Question ${S.qIndex+1} of ${S.mainCount}`;
+  if(S.mode==="duel"){const [a,b]=S.active;return `${esc(nm(a))} ${S.scores[a]||0} – ${S.scores[b]||0} ${esc(nm(b))}`}
+  return `Round ${S.round} · ${S.alive.length} left`;
+}
+function standings(){
+  const ids=S.active.slice(),s=S.scores,out=S.outRound,w=S.winners||[],alive=S.alive;
+  return ids.sort((a,b)=>(w.includes(b)-w.includes(a))||(alive.includes(b)-alive.includes(a))||((out[b]||0)-(out[a]||0))||((s[b]||0)-(s[a]||0)));
+}
+function boardHTML(showDelta,limit,me){
+  const r=S.results||{},w=S.winners||[],duel=S.mode==="duel",outMode=S.mode==="survivor"||S.mode==="elimination";
+  let list=standings();if(limit)list=list.slice(0,limit);
+  return `<table class="board"><tbody>${list.map(id=>{const i=standings().indexOf(id);
+    const isOut=outMode&&!S.alive.includes(id),d=showDelta&&r[id]&&r[id].pts?`+${r[id].pts}`:"";
+    return `<tr class="${isOut?"isout":""}"><td class="rk">${i+1}</td><td class="nmc">${esc(nm(id))} ${id===me?'<span class="tag you">you</span>':""} ${S.status==="done"&&w.includes(id)?'<span class="tag win">winner</span>':""} ${isOut?'<span class="tag out">out</span>':""}</td><td class="dl">${d}</td><td class="sc">${(S.scores[id]||0).toLocaleString()}${duel?` / ${DUEL_TARGET}`:""}</td></tr>`}).join("")}</tbody></table>`;
+}
+
+// ================= HOST =================
+let hostPeer=null,room=null,P={},hostLive=false,hostT={},wake=null;
+
+function newRoom(){return{code:genCode(),status:"lobby",mode:"classic",timer:20,cats:CATS.slice(),custom:"",auto:true,gameNo:0,duelPick:[]}}
+function startHost(resume){
+  if(!libsOk()){homeErr="Couldn't load the connection library. Check your internet and reload.";render();return}
+  role="host";
+  const saved=resume?JSON.parse(lsGet("qn_host")||"null"):null;
+  if(saved){room=saved.room;P=saved.P||{};Object.values(P).forEach(p=>{p.online=false;p.conn=null})}
+  else{room=newRoom();P={}}
+  if(room.status==="question")room.qStartedAt=Date.now(); // give everyone a fresh clock after a reload
+  openHostPeer(0,!saved);requestWake();changed();
+}
+function openHostPeer(tries,fresh){
+  hostLive=false;
+  hostPeer=new Peer(PREFIX+room.code);
+  hostPeer.on("open",()=>{hostLive=true;render()});
+  hostPeer.on("connection",c=>{
+    c.on("data",d=>onHostData(c,d));
+    c.on("close",()=>{for(const id in P){if(P[id].conn===c){P[id].conn=null;P[id].online=false;changed()}}});
+  });
+  hostPeer.on("disconnected",()=>{hostLive=false;render();setTimeout(()=>{try{if(hostPeer&&!hostPeer.destroyed)hostPeer.reconnect()}catch(e){}},1500)});
+  hostPeer.on("error",e=>{
+    if(e.type==="unavailable-id"){hostPeer.destroy();
+      if(fresh){room.code=genCode();openHostPeer(0,true)}
+      else if(tries<10)setTimeout(()=>openHostPeer(tries+1,false),3000);
+      else{toast("Couldn't reclaim the room code. Starting a fresh room.");room.code=genCode();openHostPeer(0,true)}
+      render();return}
+    if(["network","server-error","socket-error","socket-closed"].includes(e.type)){hostLive=false;render()}
+  });
+}
+function requestWake(){try{navigator.wakeLock&&navigator.wakeLock.request("screen").then(w=>wake=w).catch(()=>{})}catch(e){}}
+document.addEventListener("visibilitychange",()=>{if(role==="host"&&document.visibilityState==="visible")requestWake()});
+
+function onHostData(c,d){
+  if(!d||typeof d!=="object")return;
+  if(d.t==="join"){
+    const id=String(d.id||"").slice(0,40);if(!id)return;
+    const name=String(d.name||"Player").trim().slice(0,16)||"Player";
+    if(P[id]){P[id].name=name;P[id].conn=c;P[id].online=true}
+    else P[id]={name,joinedAt:Date.now(),answers:{},conn:c,online:true};
+    changed();return;
+  }
+  if(d.t==="ans"){
+    let id=null;for(const k in P)if(P[k].conn===c)id=k;
+    const k=qk();if(!id||room.status!=="question"||d.k!==k||!(room.alive||[]).includes(id)||P[id].answers[k])return;
+    const n=room.questions[room.qIndex].o.length,ci=d.c|0;if(ci<0||ci>=n)return;
+    P[id].answers[k]={c:ci,ms:Math.max(0,Math.min(+d.ms||0,room.timer*1000))};
+    changed();
+  }
+}
+function qk(){return `g${room.gameNo}q${room.qIndex}`}
+function pub(){
+  const reveal=room.status==="reveal"||room.status==="done";
+  const q=room.questions&&room.questions[room.qIndex],k=qk();
+  return{code:room.code,status:room.status,mode:room.mode,timer:room.timer,k,qIndex:room.qIndex||0,round:room.round||0,mainCount:room.mainCount||0,phase:room.phase,tb:room.tb||0,
+    q:q?{q:q.q,o:q.o,cat:q.cat,a:reveal?q.a:null}:null,
+    alive:room.alive||[],active:room.active||[],scores:room.scores||{},outRound:room.outRound||{},results:reveal?room.results:null,events:room.events||[],final:!!room.final,winners:room.winners||null,
+    players:Object.fromEntries(Object.entries(P).map(([id,p])=>[id,{n:p.name,on:!!p.online,j:p.joinedAt}])),
+    answered:room.status==="question"?(room.alive||[]).filter(id=>P[id]&&P[id].answers[k]):[],duelPick:room.duelPick||[],gameNo:room.gameNo,auto:!!room.auto};
+}
+function changed(){
+  S=pub();
+  try{lsSet("qn_host",JSON.stringify({room,P:Object.fromEntries(Object.entries(P).map(([id,p])=>[id,{name:p.name,joinedAt:p.joinedAt,answers:p.answers}])),at:Date.now()}))}catch(e){}
+  for(const id in P){const c=P[id].conn;if(c&&c.open){try{c.send({t:"state",s:S})}catch(e){}}}
+  hostTick();render();
+}
+function set(patch){Object.assign(room,patch);changed()}
+function hostTick(){
+  const k=qk();
+  if(room.status==="question"){
+    if(hostT.qKey!==k){clearTimeout(hostT.q);hostT.qKey=k;hostT.q=setTimeout(()=>closeQ(k),Math.max(0,room.qStartedAt+room.timer*1000+1200-Date.now()))}
+    const alive=room.alive||[];
+    if(alive.length&&alive.every(id=>P[id]&&P[id].answers[k])&&hostT.eKey!==k){hostT.eKey=k;hostT.e=setTimeout(()=>closeQ(k),900)}
+  }
+  if(room.status==="reveal"&&room.auto&&!room.final&&hostT.rKey!==k){clearTimeout(hostT.r);hostT.rKey=k;hostT.r=setTimeout(()=>{if(room.status==="reveal"&&qk()===k)nextQ()},8000)}
+}
+function parseCustom(txt){return String(txt||"").split("\n").map(l=>l.split("|").map(s=>s.trim()).filter(Boolean)).filter(p=>p.length>=3&&p.length<=5).map(p=>["Custom",...p])}
+function buildPool(cats,custom,n){
+  const list=[...parseCustom(custom),...shuffle(BANK.filter(b=>cats.includes(b[0])))].slice(0,n);
+  return list.map(([cat,q,right,...wrong])=>{const o=shuffle([right,...wrong]);return{cat,q,o,a:o.indexOf(right)}});
+}
+function participants(){return Object.entries(P).filter(([,p])=>p.online).sort((a,b)=>a[1].joinedAt-b[1].joinedAt).map(([id])=>id)}
+function startProblem(){
+  const parts=participants(),m=room.mode;
+  if(!room.cats.length&&!parseCustom(room.custom).length)return"Pick at least one category.";
+  if(parts.length<1)return"Waiting for players to join.";
+  if(m==="duel"){const pk=room.duelPick.filter(id=>parts.includes(id));if(pk.length!==2)return parts.length<2?"A duel needs 2 players.":"Pick the 2 duelists.";}
+  else if(m!=="classic"&&parts.length<2)return`${MODES[m].name} needs at least 2 players.`;
+  return"";
+}
+function startGame(){
+  if(startProblem())return;
+  const m=room.mode,parts=participants(),active=m==="duel"?room.duelPick.filter(id=>parts.includes(id)):parts;
+  const qs=buildPool(room.cats,room.custom,m==="classic"?MAIN+6:45);
+  set({status:"question",gameNo:(room.gameNo||0)+1,questions:qs,mainCount:Math.min(MAIN,qs.length),qIndex:0,round:1,qStartedAt:Date.now(),
+    active,alive:active.slice(),scores:Object.fromEntries(active.map(id=>[id,0])),outRound:{},results:null,events:[],final:false,winners:null,phase:"main",tb:0});
+}
+function topOf(ids,sc){const t=Math.max(...ids.map(id=>sc[id]||0));return ids.filter(id=>(sc[id]||0)===t)}
+function closeQ(k){
+  if(room.status!=="question"||qk()!==k)return;
+  const q=room.questions[room.qIndex],dur=room.timer*1000,mode=room.mode,nmH=id=>(P[id]&&P[id].name)||"Someone",namesH=ids=>ids.map(nmH).join(", ");
+  const alive=room.alive.slice(),scores={...room.scores},out={...room.outRound},res={},ev=[];
+  alive.forEach(id=>{const a=P[id]&&P[id].answers[k];const ok=!!a&&a.c===q.a;const ms=a?a.ms:null;res[id]={c:a?a.c:-1,ok,ms,pts:ok?500+Math.round(500*(1-ms/dur)):0}});
+  let newAlive=alive,final=false,winners=null,phase=room.phase,tb=room.tb||0;
+  const last=room.qIndex+1>=room.questions.length,addPts=()=>alive.forEach(id=>scores[id]=(scores[id]||0)+res[id].pts);
+  if(mode==="classic"){
+    if(phase==="main"){addPts();
+      if(room.qIndex+1>=room.mainCount){const tied=topOf(alive,scores);
+        if(tied.length>1&&!last){newAlive=tied;phase="tiebreak";ev.push(`Tie at the top! ${namesH(tied)} go to a sudden-death tiebreaker.`)}
+        else{final=true;winners=tied}}
+    }else{tb++;Object.values(res).forEach(r=>r.pts=0);
+      const ok=alive.filter(id=>res[id].ok).sort((a,b)=>res[a].ms-res[b].ms);
+      if(ok.length){final=true;winners=[ok[0]];ev.push(`${nmH(ok[0])} wins the tiebreaker!`)}
+      else if(last||tb>=5){final=true;winners=alive;ev.push("Nobody cracked it. It's a shared win.")}
+      else ev.push("Nobody got it. Another tiebreaker!")}
+  }else if(mode==="survivor"){addPts();const wrong=alive.filter(id=>!res[id].ok);
+    if(wrong.length===alive.length)ev.push("Everyone missed, so everyone survives.");
+    else if(wrong.length){newAlive=alive.filter(id=>res[id].ok);wrong.forEach(id=>out[id]=room.round);ev.push(`Out: ${namesH(wrong)}`)}
+    else ev.push("Everyone survived this one.");
+    if(newAlive.length<=1){final=true;winners=newAlive}
+    else if(last){final=true;winners=topOf(newAlive,scores);ev.push("Out of questions. Highest score among the survivors wins.")}
+  }else if(mode==="elimination"){addPts();
+    if(alive.length>1){const low=Math.min(...alive.map(id=>scores[id]));let c=alive.filter(id=>scores[id]===low);
+      if(c.length>1){const lp=Math.min(...c.map(id=>res[id].pts));c=c.filter(id=>res[id].pts===lp)}
+      if(c.length>1){const slow=id=>res[id].ms==null?Infinity:res[id].ms;const mx=Math.max(...c.map(slow));const c2=c.filter(id=>slow(id)===mx);if(c2.length===1)c=c2}
+      if(c.length===1){newAlive=alive.filter(id=>id!==c[0]);out[c[0]]=room.round;ev.push(`${nmH(c[0])} has the lowest score and is knocked out.`)}
+      else ev.push(`Dead heat at the bottom (${namesH(c)}). Nobody goes out this round.`)}
+    if(newAlive.length<=1){final=true;winners=newAlive}
+    else if(last){final=true;winners=topOf(newAlive,scores);ev.push("Out of questions. Highest score wins.")}
+  }else{const ok=alive.filter(id=>res[id].ok).sort((a,b)=>res[a].ms-res[b].ms);alive.forEach(id=>res[id].pts=0);
+    if(ok.length){res[ok[0]].pts=1;scores[ok[0]]=(scores[ok[0]]||0)+1;ev.push(`${nmH(ok[0])} takes the point.`)}else ev.push("Nobody got it. No point this round.");
+    const w=alive.filter(id=>scores[id]>=DUEL_TARGET);if(w.length){final=true;winners=w}else if(last){final=true;winners=topOf(alive,scores)}}
+  if(winners&&!winners.length)winners=alive;
+  clearTimeout(hostT.q);clearTimeout(hostT.e);
+  set({status:"reveal",results:res,events:ev,alive:newAlive,scores,outRound:out,final,winners,phase,tb});
+}
+function nextQ(){if(room.status!=="reveal")return;clearTimeout(hostT.r);
+  if(room.final){set({status:"done"});return}
+  set({status:"question",qIndex:room.qIndex+1,round:room.round+1,qStartedAt:Date.now(),results:null,events:[]})}
+function endHost(){
+  for(const id in P){try{P[id].conn&&P[id].conn.send({t:"closed"})}catch(e){}}
+  try{hostPeer&&hostPeer.destroy()}catch(e){}
+  Object.values(hostT).forEach(v=>clearTimeout(v));hostT={};lsDel("qn_host");role=null;room=null;P={};S=null;render();
+}
+function hostTimeLeft(){return Math.max(0,room.qStartedAt+room.timer*1000-Date.now())}
+
+// ---- host (TV) screens ----
+function hostLobby(){
+  const m=MODES[room.mode],list=Object.entries(P).sort((a,b)=>a[1].joinedAt-b[1].joinedAt),duel=room.mode==="duel";
+  const isFile=location.protocol==="file:";
+  return `<div class="tv">
+  <div class="top"><div class="brand"><div class="bulb">?</div><h1>Quiz Night</h1></div><span class="conn ${hostLive?"":"warn"}">${hostLive?"Room open":"Connecting…"}</span></div>
+  <div class="lobby">
+    <div class="panel joinbox">
+      <span class="label">Grab your phone and join</span>
+      <div class="joinrow">${isFile?"":`<div class="qr" id="qr"></div>`}<div style="display:flex;flex-direction:column;gap:10px;min-width:0">${tiles(room.code)}${isFile?`<span class="hint">Put this page online to get a join link and QR code.</span>`:`<span class="url">${esc(location.host+location.pathname)}</span>`}</div></div>
+      <h2 style="font-size:clamp(22px,2.6vw,34px)">${m.name}</h2><p class="hint" style="font-size:clamp(14px,1.4vw,18px)">${m.rules}</p>
+    </div>
+    <div class="panel"><div class="top"><span class="label">Players · ${participants().length}</span>${duel?`<span class="hint">Tap 2 to duel</span>`:""}</div>
+      <div class="pgrid">${list.map(([id,p])=>`<span class="pchip ${p.online?"":"off"}"><span class="n">${esc(p.name)}</span>${duel&&p.online?`<button class="pick" data-act="pick" data-v="${esc(id)}" aria-pressed="${room.duelPick.includes(id)}">${room.duelPick.includes(id)?"Dueling":"Pick"}</button>`:""}<button class="x" data-act="kick" data-v="${esc(id)}" aria-label="Remove ${esc(p.name)}">×</button></span>`).join("")||`<span class="hint">Nobody yet. Scan the code or type it in.</span>`}</div>
+    </div>
+  </div>
+  <div class="panel"><details id="settings" ${lsGet("qn_set_open")==="0"?"":"open"}><summary>Game settings</summary>
+    <div style="display:flex;flex-direction:column;gap:14px;margin-top:14px">
+      <div class="modes">${Object.entries(MODES).map(([k,v])=>`<button class="mode" data-act="mode" data-v="${k}" aria-pressed="${room.mode===k}"><b>${v.name}</b><span>${v.tag}</span></button>`).join("")}</div>
+      <span class="label">Seconds per question</span><div class="chips">${TIMERS.map(t=>`<button class="chip" data-act="timer" data-v="${t}" aria-pressed="${room.timer===t}">${t}s</button>`).join("")}</div>
+      <span class="label">Categories</span><div class="chips">${CATS.map(c=>`<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${room.cats.includes(c)}">${esc(c)}</button>`).join("")}</div>
+      <button class="toggle" data-act="auto" aria-pressed="${!!room.auto}"><span>Move to the next question automatically</span><span class="sw"></span></button>
+      <div class="field"><span class="label">Your own questions</span><p class="hint">One per line: question | right answer | wrong | wrong | wrong. Yours go first, then the bank fills in.</p>
+        <textarea id="customQ" placeholder="Who has the messiest desk? | Dave | Priya | Marco | Steve">${esc(room.custom)}</textarea><span class="hint" id="customCount">${countLabel(room.custom)}</span></div>
+    </div></details></div>
+  </div>`;
+}
+function countLabel(t){const n=parseCustom(t).length;return n?`${n} custom question${n>1?"s":""} ready`:""}
+function hostQuestion(){
+  const left=hostTimeLeft();
+  return `<div class="tv">
+  <div class="qmeta"><span class="qnum">${qLabel()}</span><span class="tag">${MODES[S.mode].name}</span></div>
+  <div class="timer"><div class="track"><div class="bar ${left<5000?"low":""}" id="tbar" style="transform:scaleX(${left/(S.timer*1000)})"></div></div><span class="secs" id="tnum">${Math.ceil(left/1000)}</span></div>
+  <div class="label">${esc(S.q.cat)}</div>
+  <p class="qtext">${esc(S.q.q)}</p>
+  <div class="opts">${S.q.o.map((o,i)=>`<div class="opt o${i}"><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></div>`).join("")}</div>
+  <div class="dots">${S.alive.map(id=>`<span class="dot ${S.answered.includes(id)?"in":""}">${esc(nm(id))}</span>`).join("")}</div>
+  </div>`;
+}
+function hostReveal(){
+  const r=S.results||{};const pick=i=>Object.entries(r).filter(([,v])=>v.c===i).map(([id])=>nm(id));
+  return `<div class="tv">
+  <div class="qmeta"><span class="qnum">${qLabel()}</span><span class="tag">${MODES[S.mode].name}</span></div>
+  <p class="qtext" style="font-size:clamp(20px,3vw,40px)">${esc(S.q.q)}</p>
+  <div class="split">
+    <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+      <div class="opts">${S.q.o.map((o,i)=>{const p=pick(i);return `<div class="opt o${i} ${i===S.q.a?"right":"dim"}"><span class="lt"><span>${"ABCD"[i]}${i===S.q.a?" ✓":""}</span><span>${p.length}</span></span><span>${esc(o)}</span>${p.length&&p.length<=4?`<span class="who">${esc(p.join(", "))}</span>`:""}</div>`}).join("")}</div>
+      ${S.events.length?`<ul class="events">${S.events.map(e=>`<li>${esc(e)}</li>`).join("")}</ul>`:""}
+    </div>
+    <div class="panel"><span class="label">${S.final?"Final standings":"Standings"}</span>${boardHTML(true,10)}</div>
+  </div></div>`;
+}
+function hostDone(){
+  const w=S.winners||[];
+  return `<div class="tv"><div class="winner"><span class="label">${MODES[S.mode].name} · ${w.length>1?"shared win":"winner"}</span><h2>${esc(names(w)||"Nobody")}</h2></div>
+  <div class="panel"><span class="label">Final standings</span>${boardHTML(false)}</div></div>`;
+}
+function hostDock(){
+  const s=room.status;
+  if(s==="lobby"){const p=startProblem();return `<button class="btn line" data-act="end">End</button><div class="info">${p?esc(p):`<b>${participants().length}</b> ready · ${MODES[room.mode].name}`}</div><button class="btn hot" data-act="start" ${p?"disabled":""}>Start game</button>`}
+  if(s==="question")return `<div class="info"><b>${S.answered.length}/${S.alive.length}</b> answered</div><button class="btn line" data-act="close">Reveal now</button>`;
+  if(s==="reveal")return `<div class="info">${room.final?"Game over":room.auto?"Next question in a few seconds":"Ready when you are"}</div><button class="btn hot" data-act="next">${room.final?"Final results":"Next question"}</button>`;
+  return `<button class="btn line" data-act="end">End</button><div class="info">Same players, new questions</div><button class="btn hot" data-act="lobby">Back to lobby</button>`;
+}
+
+// ================= PLAYER =================
+let pPeer=null,pConn=null,pCode="",pState="idle",myId=null,myName="",seen={k:null,t:0},picks={},expiredKey=null,connTimer=null,retryT=null;
+myId=lsGet("qn_pid");if(!myId){myId="p"+Math.random().toString(36).slice(2,11);lsSet("qn_pid",myId)}
+
+function joinAsPlayer(code){
+  if(!libsOk()){homeErr="Couldn't load the connection library. Check your internet and reload.";render();return}
+  role="player";pCode=code;myName=homeName;pState="connecting";S=null;lsSet("qn_last",code);render();
+  pPeer=new Peer();
+  pPeer.on("open",dial);
+  pPeer.on("disconnected",()=>{setTimeout(()=>{try{pPeer&&!pPeer.destroyed&&pPeer.reconnect()}catch(e){}},1500)});
+  pPeer.on("error",e=>{
+    if(e.type==="peer-unavailable"){
+      if(!S){leavePlayer(`No room with code ${code} is open right now. Check the code on the TV.`)}
+      else{pState="reconnecting";render();clearTimeout(retryT);retryT=setTimeout(dial,3000)}
+    }else if(!S&&["network","server-error","socket-error","browser-incompatible"].includes(e.type)){leavePlayer("Couldn't connect. Check your internet and try again.")}
+  });
+  clearTimeout(connTimer);connTimer=setTimeout(()=>{if(role==="player"&&!S)leavePlayer("Couldn't reach the room. If you're on office Wi-Fi, try mobile data.")},15000);
+}
+function dial(){
+  if(role!=="player"||!pPeer||pPeer.destroyed)return;
+  try{pConn&&pConn.close()}catch(e){}
+  pConn=pPeer.connect(PREFIX+pCode,{reliable:true});
+  pConn.on("open",()=>{pState="live";pConn.send({t:"join",id:myId,name:myName});render()});
+  pConn.on("data",d=>{
+    if(!d)return;
+    if(d.t==="state"){S=d.s;if(S.status==="question"&&seen.k!==S.k){seen={k:S.k,t:performance.now()}}render()}
+    if(d.t==="closed")leavePlayer("The host ended the room.");
+  });
+  pConn.on("close",()=>{if(role==="player"){pState="reconnecting";render();clearTimeout(retryT);retryT=setTimeout(dial,2000)}});
+}
+function leavePlayer(msg){
+  clearTimeout(connTimer);clearTimeout(retryT);role=null;S=null;
+  try{pConn&&pConn.close()}catch(e){}try{pPeer&&pPeer.destroy()}catch(e){}pPeer=null;pConn=null;
+  homeErr=msg||"";render();
+}
+function pTimeLeft(){return S?Math.max(0,S.timer*1000-(performance.now()-seen.t)):0}
+function canAnswer(){return S&&S.status==="question"&&S.alive.includes(myId)&&picks[S.k]==null&&!S.answered.includes(myId)&&pTimeLeft()>0}
+function answer(i){
+  if(!canAnswer()||!pConn||!pConn.open){if(pState!=="live")toast("Reconnecting… try again in a second.");return}
+  const ms=Math.round(performance.now()-seen.t);picks[S.k]=i;pConn.send({t:"ans",k:S.k,c:i,ms});render();
+}
+
+function pHeader(){return `<div class="top"><div class="brand"><div class="bulb">?</div><h1>Quiz Night</h1></div><span class="conn ${pState==="live"?"":"warn"}">${pState==="live"?esc(myName)+" · "+esc(pCode):"Reconnecting…"}</span></div>`}
+function playerScreen(){
+  if(!S)return `<div class="wrap">${pHeader()}<div class="status">Joining room ${esc(pCode)}…</div></div>`;
+  const inGame=S.active.includes(myId),alive=S.alive.includes(myId);
+  let h=`<div class="wrap">${pHeader()}`;
+  if(S.status==="lobby"){
+    h+=`<div class="panel" style="text-align:center;align-items:center"><span class="label">You're in</span><h2 style="font-size:30px">${esc(myName)}</h2><p class="hint">Watch the TV. Questions show up there, and you answer here.</p></div>
+    <div class="panel"><span class="label">Up next · ${S.timer}s per question</span><h3 style="font-size:20px">${MODES[S.mode].name}</h3><p class="hint">${MODES[S.mode].rules}</p>
+    ${S.mode==="duel"&&S.duelPick.includes(myId)?`<span class="tag win" style="align-self:flex-start">You're dueling</span>`:""}</div>`;
+  }else if(S.status==="question"){
+    const mine=picks[S.k]!=null?picks[S.k]:(S.answered.includes(myId)?-2:null),left=pTimeLeft();
+    let st="";
+    if(!alive)st=inGame?"You're out. Watch the TV.":"You joined mid-game. You'll play in the next one.";
+    else if(mine!=null)st="Locked in!";else if(left<=0)st="Time's up!";
+    h+=`<div class="qmeta"><span class="qnum">${qLabel()}</span></div>
+    <div class="timer"><div class="track"><div class="bar ${left<5000?"low":""}" id="tbar" style="transform:scaleX(${left/(S.timer*1000)})"></div></div><span class="secs" id="tnum">${Math.ceil(left/1000)}</span></div>
+    <p style="margin:0;font-weight:600">${esc(S.q.q)}</p>
+    <div class="pad">${S.q.o.map((o,i)=>`<button class="opt o${i} ${mine===i?"mine":""} ${mine!=null&&mine!==i?"dim":""}" data-act="ans" data-v="${i}" ${canAnswer()?"":"disabled"}><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></button>`).join("")}</div>
+    ${st?`<div class="status">${st}</div>`:""}`;
+  }else if(S.status==="reveal"){
+    const me=S.results&&S.results[myId],rank=standings().indexOf(myId)+1;
+    if(me){const outNow=(S.mode==="survivor"||S.mode==="elimination")&&!alive;
+      if(me.ok)h+=`<div class="verdict good"><span class="label">Correct</span><span class="big">${S.mode==="duel"?(me.pts?"Point to you":"Right, but too slow"):"+"+me.pts.toLocaleString()}</span><span class="hint">Answered in ${(me.ms/1000).toFixed(1)}s</span>${outNow?`<span class="err">Lowest total, so you're out</span>`:""}</div>`;
+      else h+=`<div class="verdict bad"><span class="label">${me.c<0?"No answer":"Wrong"}</span><span class="big">${outNow?"You're out":"No points"}</span><span class="hint">It was ${esc(S.q.o[S.q.a])}</span></div>`;
+    }else h+=`<div class="verdict"><span class="label">Answer</span><span class="big" style="font-size:26px">${esc(S.q.o[S.q.a])}</span></div>`;
+    if(inGame)h+=`<div class="rankline">You're ${ordinal(rank)} · ${(S.scores[myId]||0).toLocaleString()}${S.mode==="duel"?` / ${DUEL_TARGET}`:" pts"}</div>`;
+    if(S.events.length)h+=`<ul class="events">${S.events.map(e=>`<li>${esc(e)}</li>`).join("")}</ul>`;
+  }else if(S.status==="done"){
+    const w=S.winners||[],rank=standings().indexOf(myId)+1;
+    h+=`<div class="winner"><span class="label">${w.length>1?"Shared win":"Winner"}</span><h2 style="font-size:36px">${esc(names(w))}</h2>${w.includes(myId)?"<span>That's you. Bragging rights secured.</span>":""}</div>
+    ${inGame?`<div class="rankline">You finished ${ordinal(rank)}</div>`:""}
+    <div class="panel"><span class="label">Final standings</span>${boardHTML(false,0,myId)}</div>`;
+  }
+  return h+`<button class="ghost" data-act="pleave" style="align-self:center">Leave room</button></div>`;
+}
+function ordinal(n){const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0])}
+
+// ================= HOME =================
+let homeName=lsGet("qn_name")||"",homeCode=(new URLSearchParams(location.search).get("room")||"").toUpperCase().replace(/[^A-Z]/g,"").slice(0,4),homeErr="";
+function homeScreen(){
+  const saved=JSON.parse(lsGet("qn_host")||"null"),canResume=saved&&Date.now()-saved.at<6*3600e3;
+  const last=lsGet("qn_last");
+  return `<div class="wrap">
+  <div class="top"><div class="brand"><div class="bulb">?</div><h1>Quiz Night</h1></div></div>
+  <div class="panel">
+    <h2 style="font-size:26px">${homeCode?"You've been invited to play":"Join the game"}</h2>
+    <div class="field"><label class="label" for="nm">Your name</label><input type="text" id="nm" maxlength="16" autocomplete="nickname" placeholder="e.g. Big Mike" value="${esc(homeName)}"></div>
+    <div class="field"><label class="label" for="cd">Room code (on the TV)</label><input type="text" id="cd" class="codein" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="ABCD" value="${esc(homeCode)}"></div>
+    <button class="btn hot" data-act="join">Join room</button>
+    ${last&&!homeCode?`<button class="btn line" data-act="rejoin">Rejoin ${esc(last)}</button>`:""}
+    ${homeErr?`<p class="err">${esc(homeErr)}</p>`:""}
+  </div>
+  <div class="or">running the quiz?</div>
+  <div class="panel">
+    <p class="hint">Host on the phone or laptop you'll cast to the TV. Keep this page open and the screen on for the whole game.</p>
+    <button class="btn" data-act="host">Host a new room</button>
+    ${canResume?`<button class="btn line" data-act="resume">Resume hosting ${esc(saved.room.code)}</button>`:""}
+  </div></div>`;
+}
+
+// ================= RENDER / EVENTS =================
+function render(){
+  const app=$("#app");let dock="";
+  if(role==="host"&&room){
+    const ta=$("#customQ"),keepFocus=ta&&document.activeElement===ta;
+    if(room.status==="lobby"&&keepFocus){ // don't wipe the textarea while typing; just refresh the dock
+    }else{
+      app.innerHTML={lobby:hostLobby,question:hostQuestion,reveal:hostReveal,done:hostDone}[room.status]();
+      if(room.status==="lobby"&&$("#qr")&&window.QRCode){try{new QRCode($("#qr"),{text:joinUrl(room.code),width:200,height:200,colorDark:"#0E1016",colorLight:"#FFFFFF"})}catch(e){}}
+    }
+    dock=hostDock();
+  }else if(role==="player")app.innerHTML=playerScreen();
+  else app.innerHTML=homeScreen();
+  $("#dock").hidden=!dock;$("#dockIn").innerHTML=dock;
+}
+function doJoin(code){
+  homeName=homeName.trim().slice(0,16);
+  if(!homeName){homeErr="Enter your name first.";render();return}
+  code=(code||homeCode).toUpperCase();
+  if(!/^[A-Z]{4}$/.test(code)){homeErr="Room codes are 4 letters.";render();return}
+  lsSet("qn_name",homeName);homeErr="";joinAsPlayer(code);
+}
+document.addEventListener("input",e=>{
+  if(e.target.id==="nm")homeName=e.target.value;
+  if(e.target.id==="cd"){homeCode=e.target.value.toUpperCase().replace(/[^A-Z]/g,"").slice(0,4);e.target.value=homeCode}
+  if(e.target.id==="customQ")$("#customCount").textContent=countLabel(e.target.value);
+});
+document.addEventListener("change",e=>{if(e.target.id==="customQ"&&role==="host"){room.custom=e.target.value.slice(0,20000);changed()}});
+document.addEventListener("toggle",e=>{if(e.target.id==="settings")lsSet("qn_set_open",e.target.open?"1":"0")},true);
+document.addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.target.id==="cd"||e.target.id==="nm"))doJoin()});
+document.addEventListener("click",e=>{
+  const b=e.target.closest("[data-act]");if(!b)return;const v=b.dataset.v,a=b.dataset.act;
+  if(a==="join")doJoin();
+  else if(a==="rejoin")doJoin(lsGet("qn_last"));
+  else if(a==="host")startHost(false);
+  else if(a==="resume")startHost(true);
+  else if(a==="ans")answer(+v);
+  else if(a==="pleave")leavePlayer("");
+  else if(role!=="host")return;
+  else if(a==="mode")set({mode:v});
+  else if(a==="timer")set({timer:+v});
+  else if(a==="cat")set({cats:room.cats.includes(v)?room.cats.filter(x=>x!==v):[...room.cats,v]});
+  else if(a==="auto")set({auto:!room.auto});
+  else if(a==="pick"){let p=room.duelPick.slice();p=p.includes(v)?p.filter(x=>x!==v):[...p,v].slice(-2);set({duelPick:p})}
+  else if(a==="kick"){const p=P[v];if(p){try{p.conn&&p.conn.send({t:"closed"});p.conn&&p.conn.close()}catch(err){}delete P[v];room.duelPick=room.duelPick.filter(x=>x!==v);changed()}}
+  else if(a==="start")startGame();
+  else if(a==="close")closeQ(qk());
+  else if(a==="next")nextQ();
+  else if(a==="lobby")set({status:"lobby",results:null,events:[],final:false,winners:null});
+  else if(a==="end"){if(b.dataset.armed){endHost()}else{b.dataset.armed="1";b.textContent="Tap again to end";setTimeout(()=>{if(b.isConnected){delete b.dataset.armed;b.textContent="End"}},3000)}}
+});
+// countdown ticker
+setInterval(()=>{
+  if(!S||S.status!=="question")return;
+  const dur=S.timer*1000,left=role==="host"?hostTimeLeft():pTimeLeft(),bar=$("#tbar"),num=$("#tnum");
+  if(bar){bar.style.transform=`scaleX(${left/dur})`;bar.classList.toggle("low",left<5000)}
+  if(num)num.textContent=Math.ceil(left/1000);
+  if(role==="player"&&left<=0&&expiredKey!==S.k){expiredKey=S.k;render()}
+},100);
+window.addEventListener("beforeunload",e=>{if(role==="host"&&room&&room.status!=="lobby"){e.preventDefault();e.returnValue=""}});
+render();
+</script>
+</body>
+</html>
