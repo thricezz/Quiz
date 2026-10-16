@@ -307,12 +307,12 @@ const BANK = [
 ];
 const CATS=["General","Science","Geography","History","Sports","Screen & Music","Food"];
 const MODES={
-  classic:{name:"Classic",tag:"10 questions, speed scores",rules:"Ten questions for everyone. A right answer scores up to 1,000 points, and faster answers score more. Tied at the top? Sudden-death tiebreaker: fastest right answer wins."},
+  classic:{name:"Classic",tag:"10 questions, 1 point each",rules:"Ten questions for everyone. One point per right answer, and speed doesn't matter. Tied at the top? Sudden-death tiebreaker: the fastest right answer wins."},
   survivor:{name:"Survivor",tag:"One miss and you're out",rules:"Get one wrong, or run out of time, and you're out. If everyone still in misses the same question, everyone survives it. Last one standing wins."},
-  elimination:{name:"Elimination",tag:"Lowest score drops each round",rules:"Everyone scores speed points each round. After every question, the lowest total is knocked out. Last one standing wins."},
+  elimination:{name:"Elimination",tag:"10-question rounds, lowest out",rules:"Rounds of 10 questions, 1 point per right answer. The lowest score after each round is eliminated, then scores reset and a new round starts with everyone left. Tied for last? Sudden death decides who goes. Last one standing wins."},
   duel:{name:"1v1 Duel",tag:"Head to head, first to 5",rules:"Two players go head to head while everyone else watches. Fastest right answer takes the point. First to 5 wins."}
 };
-const MAIN=10,DUEL_TARGET=5,TIMERS=[10,15,20,30],PREFIX="officequiznight-";
+const ELIM_Q=10,MAIN=10,DUEL_TARGET=5,TIMERS=[10,15,20,30],PREFIX="officequiznight-";
 // Backup route: public MQTT-over-WebSocket relays. Everyone connects to all of them; duplicates are ignored.
 const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt"],TOPIC="officequiznight26/";
 function relayConnect(subTopics,onMsg){
@@ -349,6 +349,7 @@ const nm=id=>(S&&S.players[id]&&S.players[id].n)||"Someone";
 const names=ids=>ids.map(nm).join(", ");
 
 function qLabel(){
+  if(S.mode==="elimination")return S.phase==="tiebreak"?`Round ${S.elimRound} · Sudden death for last place`:`Round ${S.elimRound} · Q ${S.roundQ} of ${ELIM_Q} · ${S.alive.length+S.bench.length} left`;
   if(S.phase==="tiebreak")return `Tiebreaker ${S.tb+1}`;
   if(S.mode==="classic")return `Question ${S.qIndex+1} of ${S.mainCount}`;
   if(S.mode==="duel"){const [a,b]=S.active;return `${esc(nm(a))} ${S.scores[a]||0} – ${S.scores[b]||0} ${esc(nm(b))}`}
@@ -356,19 +357,31 @@ function qLabel(){
 }
 function standings(){
   const ids=S.active.slice(),s=S.scores,out=S.outRound,w=S.winners||[],alive=S.alive;
-  return ids.sort((a,b)=>(w.includes(b)-w.includes(a))||(alive.includes(b)-alive.includes(a))||((out[b]||0)-(out[a]||0))||((s[b]||0)-(s[a]||0)));
+  return ids.sort((a,b)=>(w.includes(b)-w.includes(a))||((b in out)?0:1)-((a in out)?0:1)||0||((out[b]||0)-(out[a]||0))||((s[b]||0)-(s[a]||0)));
 }
 function boardHTML(showDelta,limit,me){
   const r=S.results||{},w=S.winners||[],duel=S.mode==="duel",outMode=S.mode==="survivor"||S.mode==="elimination";
   let list=standings();if(limit)list=list.slice(0,limit);
   return `<table class="board"><tbody>${list.map(id=>{const i=standings().indexOf(id);
-    const isOut=outMode&&!S.alive.includes(id),d=showDelta&&r[id]&&r[id].pts?`+${r[id].pts}`:"";
+    const isOut=outMode&&(id in S.outRound),d=showDelta&&r[id]&&r[id].pts?`+${r[id].pts}`:"";
     return `<tr class="${isOut?"isout":""}"><td class="rk">${i+1}</td><td class="nmc">${esc(nm(id))} ${id===me?'<span class="tag you">you</span>':""} ${S.status==="done"&&w.includes(id)?'<span class="tag win">winner</span>':""} ${isOut?'<span class="tag out">out</span>':""}</td><td class="dl">${d}</td><td class="sc">${(S.scores[id]||0).toLocaleString()}${duel?` / ${DUEL_TARGET}`:""}</td></tr>`}).join("")}</tbody></table>`;
 }
 
 // ================= HOST =================
 let hostPeer=null,room=null,P={},hostLive=false,hostT={},wake=null,hostRelay=[],seq=0,epoch=Date.now(),hostPulse=null;
-const isOn=p=>!!(p&&((p.conn&&p.conn.open)||Date.now()-(p.mqSeen||0)<15000));
+const isOn=p=>!!(p&&(p.local||(p.conn&&p.conn.open)||Date.now()-(p.mqSeen||0)<15000));
+function setHostPlays(on){
+  if(on){const nm0=(homeName||lsGet("qn_name")||"Host").trim().slice(0,16)||"Host";
+    P.host=P.host||{name:nm0,joinedAt:Date.now(),answers:{}};P.host.local=true;P.host.online=true;P.host.name=nm0}
+  else delete P.host;
+  room.duelPick=room.duelPick.filter(x=>x!=="host"||on);
+  set({hostPlays:on});
+}
+function hostAnswer(i){
+  const k=qk();if(room.status!=="question"||!P.host||!(room.alive||[]).includes("host")||P.host.answers[k]||hostTimeLeft()<=0)return;
+  P.host.answers[k]={c:i,ms:Math.max(0,Math.min(Date.now()-room.qStartedAt,room.timer*1000))};
+  changed();toast("Locked in. Your pick stays hidden.");
+}
 function hostRelayStart(){
   relayEnd(hostRelay);
   hostRelay=relayConnect([TOPIC+room.code+"/up"],d=>onHostData(null,d));
@@ -410,7 +423,7 @@ function startHost(resume){
   if(!libsOk()){homeErr="Couldn't load the connection library. Check your internet and reload.";render();return}
   role="host";
   const saved=resume?JSON.parse(lsGet("qn_host")||"null"):null;
-  if(saved){room=saved.room;P=saved.P||{};Object.values(P).forEach(p=>{p.online=false;p.conn=null})}
+  if(saved){room=saved.room;P=saved.P||{};Object.values(P).forEach(p=>{p.online=false;p.conn=null});if(room.hostPlays&&P.host){P.host.local=true;P.host.online=true}}
   else{room=newRoom();P={}}
   if(room.status==="question")room.qStartedAt=Date.now(); // give everyone a fresh clock after a reload
   epoch=Date.now();seq=0;
@@ -468,7 +481,7 @@ function pub(){
     q:q?{q:q.q,o:q.o,cat:q.cat,a:reveal?q.a:null}:null,
     alive:room.alive||[],active:room.active||[],scores:room.scores||{},outRound:room.outRound||{},results:reveal?room.results:null,events:room.events||[],final:!!room.final,winners:room.winners||null,
     players:Object.fromEntries(Object.entries(P).map(([id,p])=>[id,{n:p.name,on:!!p.online,j:p.joinedAt}])),
-    answered:room.status==="question"?(room.alive||[]).filter(id=>P[id]&&P[id].answers[k]):[],duelPick:room.duelPick||[],gameNo:room.gameNo,auto:!!room.auto};
+    roundQ:room.roundQ||1,elimRound:room.elimRound||1,bench:room.bench||[],answered:room.status==="question"?(room.alive||[]).filter(id=>P[id]&&P[id].answers[k]):[],duelPick:room.duelPick||[],gameNo:room.gameNo,auto:!!room.auto};
 }
 function changed(){
   S=pub();
@@ -510,7 +523,7 @@ function startProblem(){
 }
 async function startGame(){
   if(startProblem()||loadingQs)return;
-  const n=room.mode==="classic"?MAIN+6:45;let online=[];
+  const np=participants().length,n=room.mode==="classic"?MAIN+6:room.mode==="elimination"?Math.min(150,ELIM_Q*Math.max(1,np-1)+15):45;let online=[];
   if(room.online!==false&&typeof fetch==="function"){
     loadingQs=true;render();
     try{online=await Promise.race([fetchOnline(room.cats,room.diff||"any",n),new Promise(r=>setTimeout(()=>r(null),16000))])||[]}catch(e){online=[]}
@@ -521,7 +534,7 @@ async function startGame(){
   const m=room.mode,parts=participants(),active=m==="duel"?room.duelPick.filter(id=>parts.includes(id)):parts;
   const qs=buildPool(room.cats,room.custom,n,online,room.diff);
   set({status:"question",gameNo:(room.gameNo||0)+1,questions:qs,mainCount:Math.min(MAIN,qs.length),qIndex:0,round:1,qStartedAt:Date.now(),
-    active,alive:active.slice(),scores:Object.fromEntries(active.map(id=>[id,0])),outRound:{},results:null,events:[],final:false,winners:null,phase:"main",tb:0});
+    active,alive:active.slice(),scores:Object.fromEntries(active.map(id=>[id,0])),outRound:{},results:null,events:[],final:false,winners:null,phase:"main",tb:0,roundQ:1,elimRound:1,bench:[],newRound:false});
   markAsked();render();
 }
 function topOf(ids,sc){const t=Math.max(...ids.map(id=>sc[id]||0));return ids.filter(id=>(sc[id]||0)===t)}
@@ -529,8 +542,8 @@ function closeQ(k){
   if(room.status!=="question"||qk()!==k)return;
   const q=room.questions[room.qIndex],dur=room.timer*1000,mode=room.mode,nmH=id=>(P[id]&&P[id].name)||"Someone",namesH=ids=>ids.map(nmH).join(", ");
   const alive=room.alive.slice(),scores={...room.scores},out={...room.outRound},res={},ev=[];
-  alive.forEach(id=>{const a=P[id]&&P[id].answers[k];const ok=!!a&&a.c===q.a;const ms=a?a.ms:null;res[id]={c:a?a.c:-1,ok,ms,pts:ok?500+Math.round(500*(1-ms/dur)):0}});
-  let newAlive=alive,final=false,winners=null,phase=room.phase,tb=room.tb||0;
+  alive.forEach(id=>{const a=P[id]&&P[id].answers[k];const ok=!!a&&a.c===q.a;const ms=a?a.ms:null;res[id]={c:a?a.c:-1,ok,ms,pts:ok?(mode==="classic"||mode==="elimination"?1:500+Math.round(500*(1-ms/dur))):0}});
+  let newAlive=alive,final=false,winners=null,phase=room.phase,tb=room.tb||0,newRound=false;
   const last=room.qIndex+1>=room.questions.length,addPts=()=>alive.forEach(id=>scores[id]=(scores[id]||0)+res[id].pts);
   if(mode==="classic"){
     if(phase==="main"){addPts();
@@ -548,24 +561,46 @@ function closeQ(k){
     else ev.push("Everyone survived this one.");
     if(newAlive.length<=1){final=true;winners=newAlive}
     else if(last){final=true;winners=topOf(newAlive,scores);ev.push("Out of questions. Highest score among the survivors wins.")}
-  }else if(mode==="elimination"){addPts();
-    if(alive.length>1){const low=Math.min(...alive.map(id=>scores[id]));let c=alive.filter(id=>scores[id]===low);
-      if(c.length>1){const lp=Math.min(...c.map(id=>res[id].pts));c=c.filter(id=>res[id].pts===lp)}
-      if(c.length>1){const slow=id=>res[id].ms==null?Infinity:res[id].ms;const mx=Math.max(...c.map(slow));const c2=c.filter(id=>slow(id)===mx);if(c2.length===1)c=c2}
-      if(c.length===1){newAlive=alive.filter(id=>id!==c[0]);out[c[0]]=room.round;ev.push(`${nmH(c[0])} has the lowest score and is knocked out.`)}
-      else ev.push(`Dead heat at the bottom (${namesH(c)}). Nobody goes out this round.`)}
-    if(newAlive.length<=1){final=true;winners=newAlive}
-    else if(last){final=true;winners=topOf(newAlive,scores);ev.push("Out of questions. Highest score wins.")}
+  }else if(mode==="elimination"){
+    let loser=null,bench=room.bench||[];
+    if(phase==="main"){addPts();
+      if((room.roundQ||1)>=ELIM_Q){
+        const low=Math.min(...alive.map(id=>scores[id]||0)),c=alive.filter(id=>(scores[id]||0)===low);
+        if(c.length===1)loser=c[0];
+        else if(last)loser=c[Math.floor(Math.random()*c.length)];
+        else{phase="tiebreak";tb=0;bench=alive.filter(id=>!c.includes(id));newAlive=c;ev.push(`Round ${room.elimRound} done. ${namesH(c)} are tied for last with ${low}. Sudden death!`)}
+      }else if(last){final=true;winners=topOf(alive,scores);ev.push("Out of questions. Highest score wins.")}
+    }else{ // sudden death between the players tied for last
+      tb++;Object.values(res).forEach(r=>r.pts=0);
+      const wrong=alive.filter(id=>!res[id].ok);
+      if(wrong.length===1)loser=wrong[0];
+      else if(wrong.length===0){const mx=Math.max(...alive.map(id=>res[id].ms)),sl=alive.filter(id=>res[id].ms===mx);if(sl.length===1){loser=sl[0];ev.push(`Everyone got it, but ${nmH(loser)} was slowest.`)}}
+      else if(wrong.length<alive.length){bench=bench.concat(alive.filter(id=>res[id].ok));newAlive=wrong;ev.push(`${namesH(alive.filter(id=>res[id].ok))} ${alive.length-wrong.length>1?"are":"is"} safe. ${namesH(wrong)} go again.`)}
+      else ev.push("Nobody got it. Another sudden-death question!");
+      if(!loser&&(last||tb>=6)){loser=newAlive[Math.floor(Math.random()*newAlive.length)];ev.push("Still tied, so it came down to a coin flip.")}
+    }
+    if(loser){
+      const rest=bench.concat(alive).filter(id=>id!==loser);
+      out[loser]=room.round;ev.push(`${nmH(loser)} is eliminated.`);bench=[];
+      if(rest.length<=1){final=true;winners=rest;newAlive=rest}
+      else{newAlive=rest;phase="main";newRound=true;rest.forEach(id=>scores[id]=0);ev.push(`Round ${room.elimRound+1} starts with ${rest.length} players. Scores reset.`)}
+    }
+    room.bench=bench;
   }else{const ok=alive.filter(id=>res[id].ok).sort((a,b)=>res[a].ms-res[b].ms);alive.forEach(id=>res[id].pts=0);
     if(ok.length){res[ok[0]].pts=1;scores[ok[0]]=(scores[ok[0]]||0)+1;ev.push(`${nmH(ok[0])} takes the point.`)}else ev.push("Nobody got it. No point this round.");
     const w=alive.filter(id=>scores[id]>=DUEL_TARGET);if(w.length){final=true;winners=w}else if(last){final=true;winners=topOf(alive,scores)}}
   if(winners&&!winners.length)winners=alive;
   clearTimeout(hostT.q);clearTimeout(hostT.e);
-  set({status:"reveal",results:res,events:ev,alive:newAlive,scores,outRound:out,final,winners,phase,tb});
+  set({status:"reveal",results:res,events:ev,alive:newAlive,scores,outRound:out,final,winners,phase,tb,newRound});
 }
 function nextQ(){if(room.status!=="reveal")return;clearTimeout(hostT.r);
   if(room.final){set({status:"done"});return}
-  set({status:"question",qIndex:room.qIndex+1,round:room.round+1,qStartedAt:Date.now(),results:null,events:[]});markAsked();render()}
+  const pat={status:"question",qIndex:room.qIndex+1,round:room.round+1,qStartedAt:Date.now(),results:null,events:[]};
+  if(room.mode==="elimination"){
+    if(room.newRound){pat.roundQ=1;pat.elimRound=(room.elimRound||1)+1;pat.newRound=false;pat.bench=[]}
+    else if(room.phase==="main")pat.roundQ=(room.roundQ||1)+1;
+  }
+  set(pat);markAsked();render()}
 function endHost(){
   for(const id in P){try{P[id].conn&&P[id].conn.send({t:"closed"})}catch(e){}}
   relayPub(hostRelay,TOPIC+room.code+"/down",{t:"closed"});
@@ -588,7 +623,7 @@ function hostLobby(){
       <h2 style="font-size:clamp(22px,2.6vw,34px)">${m.name}</h2><p class="hint" style="font-size:clamp(14px,1.4vw,18px)">${m.rules}</p>
     </div>
     <div class="panel"><div class="top"><span class="label">Players · ${participants().length}</span>${duel?`<span class="hint">Tap 2 to duel</span>`:""}</div>
-      <div class="pgrid">${list.map(([id,p])=>`<span class="pchip ${p.online?"":"off"}"><span class="n">${esc(p.name)}</span>${duel&&p.online?`<button class="pick" data-act="pick" data-v="${esc(id)}" aria-pressed="${room.duelPick.includes(id)}">${room.duelPick.includes(id)?"Dueling":"Pick"}</button>`:""}<button class="x" data-act="kick" data-v="${esc(id)}" aria-label="Remove ${esc(p.name)}">×</button></span>`).join("")||`<span class="hint">Nobody yet. Scan the code or type it in.</span>`}</div>
+      <div class="pgrid">${list.map(([id,p])=>`<span class="pchip ${p.online?"":"off"}"><span class="n">${esc(p.name)}</span>${duel&&p.online?`<button class="pick" data-act="pick" data-v="${esc(id)}" aria-pressed="${room.duelPick.includes(id)}">${room.duelPick.includes(id)?"Dueling":"Pick"}</button>`:""}${id==="host"?'<span class="tag you">host</span>':`<button class="x" data-act="kick" data-v="${esc(id)}" aria-label="Remove ${esc(p.name)}">×</button>`}</span>`).join("")||`<span class="hint">Nobody yet. Scan the code or type it in.</span>`}</div>
     </div>
   </div>
   <div class="panel"><details id="settings" ${lsGet("qn_set_open")==="0"?"":"open"}><summary>Game settings</summary>
@@ -600,6 +635,7 @@ function hostLobby(){
       <span class="label">Categories · ${room.online!==false?"thousands of":freshCount()} new questions left</span><div class="chips">${CATS.map(c=>`<button class="chip" data-act="cat" data-v="${esc(c)}" aria-pressed="${room.cats.includes(c)}">${esc(c)}</button>`).join("")}</div>
       ${room.online===false&&freshCount()<10?`<p class="hint">Running low on new questions, so some repeats will be mixed in. Add categories, or reset the history to start fresh.</p>`:""}
       <button class="btn line" data-act="resetused" style="align-self:flex-start;padding:8px 14px;font-size:14px">Reset question history</button>
+      <button class="toggle" data-act="hostplay" aria-pressed="${!!room.hostPlays}"><span>I'm playing too (answer on this screen; your pick stays hidden)</span><span class="sw"></span></button>
       <button class="toggle" data-act="auto" aria-pressed="${!!room.auto}"><span>Move to the next question automatically</span><span class="sw"></span></button>
       <div class="field"><span class="label">Your own questions</span><p class="hint">One per line: question | right answer | wrong | wrong | wrong. Yours go first, then the bank fills in.</p>
         <textarea id="customQ" placeholder="Who has the messiest desk? | Dave | Priya | Marco | Steve">${esc(room.custom)}</textarea><span class="hint" id="customCount">${countLabel(room.custom)}</span></div>
@@ -608,6 +644,7 @@ function hostLobby(){
   </div>`;
 }
 function countLabel(t){const n=parseCustom(t).length;return n?`${n} custom question${n>1?"s":""} ready`:""}
+function hostCanPlay(){return !!(room.hostPlays&&P.host&&(room.alive||[]).includes("host")&&!P.host.answers[qk()])}
 function hostQuestion(){
   const left=hostTimeLeft();
   return `<div class="tv">
@@ -615,7 +652,7 @@ function hostQuestion(){
   <div class="timer"><div class="track"><div class="bar ${left<5000?"low":""}" id="tbar" style="transform:scaleX(${left/(S.timer*1000)})"></div></div><span class="secs" id="tnum">${Math.ceil(left/1000)}</span></div>
   <div class="label">${esc(S.q.cat)}</div>
   <p class="qtext">${esc(S.q.q)}</p>
-  <div class="opts">${S.q.o.map((o,i)=>`<div class="opt o${i}"><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></div>`).join("")}</div>
+  <div class="opts">${S.q.o.map((o,i)=>hostCanPlay()?`<button class="opt o${i}" data-act="hans" data-v="${i}"><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></button>`:`<div class="opt o${i}"><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></div>`).join("")}</div>
   <div class="dots">${S.alive.map(id=>`<span class="dot ${S.answered.includes(id)?"in":""}">${esc(nm(id))}</span>`).join("")}</div>
   </div>`;
 }
@@ -640,7 +677,7 @@ function hostDone(){
 function hostDock(){
   const s=room.status;
   if(s==="lobby"){const p=startProblem();return `<button class="btn line" data-act="end">End</button><div class="info">${loadingQs?"<b>Loading questions…</b>":p?esc(p):`<b>${participants().length}</b> ready · ${MODES[room.mode].name}`}</div><button class="btn hot" data-act="start" ${p||loadingQs?"disabled":""}>${loadingQs?"Loading…":"Start game"}</button>`}
-  if(s==="question")return `<div class="info"><b>${S.answered.length}/${S.alive.length}</b> answered</div><button class="btn line" data-act="close">Reveal now</button>`;
+  if(s==="question")return `<div class="info"><b>${S.answered.length}/${S.alive.length}</b> answered${room.hostPlays&&(room.alive||[]).includes("host")?(P.host&&P.host.answers[qk()]?" · you're locked in":" · tap an answer to play"):""}</div><button class="btn line" data-act="close">Reveal now</button>`;
   if(s==="reveal")return `<div class="info">${room.final?"Game over":room.auto?"Next question in a few seconds":"Ready when you are"}</div><button class="btn hot" data-act="next">${room.final?"Final results":"Next question"}</button>`;
   return `<button class="btn line" data-act="end">End</button><div class="info">Same players, new questions</div><button class="btn hot" data-act="lobby">Back to lobby</button>`;
 }
@@ -730,7 +767,7 @@ function playerScreen(){
   }else if(S.status==="question"){
     const mine=picks[S.k]!=null?picks[S.k]:(S.answered.includes(myId)?-2:null),left=pTimeLeft();
     let st="";
-    if(!alive)st=inGame?"You're out. Watch the TV.":"You joined mid-game. You'll play in the next one.";
+    if(!alive)st=(S.bench||[]).includes(myId)?"You're safe. Sudden death for last place is on.":inGame?"You're out. Watch the TV.":"You joined mid-game. You'll play in the next one.";
     else if(mine!=null)st="Locked in!";else if(left<=0)st="Time's up!";
     h+=`<div class="qmeta"><span class="qnum">${qLabel()}</span></div>
     <div class="timer"><div class="track"><div class="bar ${left<5000?"low":""}" id="tbar" style="transform:scaleX(${left/(S.timer*1000)})"></div></div><span class="secs" id="tnum">${Math.ceil(left/1000)}</span></div>
@@ -739,8 +776,8 @@ function playerScreen(){
     ${st?`<div class="status">${st}</div>`:""}`;
   }else if(S.status==="reveal"){
     const me=S.results&&S.results[myId],rank=standings().indexOf(myId)+1;
-    if(me){const outNow=(S.mode==="survivor"||S.mode==="elimination")&&!alive;
-      if(me.ok)h+=`<div class="verdict good"><span class="label">Correct</span><span class="big">${S.mode==="duel"?(me.pts?"Point to you":"Right, but too slow"):"+"+me.pts.toLocaleString()}</span><span class="hint">Answered in ${(me.ms/1000).toFixed(1)}s</span>${outNow?`<span class="err">Lowest total, so you're out</span>`:""}</div>`;
+    if(me){const outNow=(S.mode==="survivor"||S.mode==="elimination")&&(myId in S.outRound);
+      if(me.ok)h+=`<div class="verdict good"><span class="label">Correct</span><span class="big">${S.mode==="duel"?(me.pts?"Point to you":"Right, but too slow"):"+"+me.pts.toLocaleString()}</span><span class="hint">Answered in ${(me.ms/1000).toFixed(1)}s</span>${outNow?`<span class="err">You're out</span>`:""}</div>`;
       else h+=`<div class="verdict bad"><span class="label">${me.c<0?"No answer":"Wrong"}</span><span class="big">${outNow?"You're out":"No points"}</span><span class="hint">It was ${esc(S.q.o[S.q.a])}</span></div>`;
     }else h+=`<div class="verdict"><span class="label">Answer</span><span class="big" style="font-size:26px">${esc(S.q.o[S.q.a])}</span></div>`;
     if(inGame)h+=`<div class="rankline">You're ${ordinal(rank)} · ${(S.scores[myId]||0).toLocaleString()}${S.mode==="duel"?` / ${DUEL_TARGET}`:" pts"}</div>`;
@@ -822,6 +859,8 @@ document.addEventListener("click",e=>{
   else if(a==="timer")set({timer:+v});
   else if(a==="cat")set({cats:room.cats.includes(v)?room.cats.filter(x=>x!==v):[...room.cats,v]});
   else if(a==="auto")set({auto:!room.auto});
+  else if(a==="hostplay")setHostPlays(!room.hostPlays);
+  else if(a==="hans")hostAnswer(+v);
   else if(a==="online")set({online:room.online===false});
   else if(a==="diff")set({diff:v});
   else if(a==="pick"){let p=room.duelPick.slice();p=p.includes(v)?p.filter(x=>x!==v):[...p,v].slice(-2);set({duelPick:p})}
