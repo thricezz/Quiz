@@ -378,7 +378,7 @@ function setHostPlays(on){
   set({hostPlays:on});
 }
 function hostAnswer(i){
-  const k=qk();if(room.status!=="question"||!P.host||!(room.alive||[]).includes("host")||P.host.answers[k]||hostTimeLeft()<=0)return;
+  const k=qk();if(room.status!=="question"||room.paused||!P.host||!(room.alive||[]).includes("host")||P.host.answers[k]||hostTimeLeft()<=0)return;
   P.host.answers[k]={c:i,ms:Math.max(0,Math.min(Date.now()-room.qStartedAt,room.timer*1000))};
   changed();toast("Locked in. Your pick stays hidden.");
 }
@@ -467,7 +467,7 @@ function onHostData(c,d){
   if(c)P[id].conn=c;else P[id].mqSeen=Date.now();
   if(!P[id].online){P[id].online=true;changed()}
   if(d.t==="ans"){
-    const k=qk();if(room.status!=="question"||d.k!==k||!(room.alive||[]).includes(id)||P[id].answers[k])return;
+    const k=qk();if(room.status!=="question"||room.paused||d.k!==k||!(room.alive||[]).includes(id)||P[id].answers[k])return;
     const n=room.questions[room.qIndex].o.length,ci=d.c|0;if(ci<0||ci>=n)return;
     P[id].answers[k]={c:ci,ms:Math.max(0,Math.min(+d.ms||0,room.timer*1000))};
     changed();
@@ -481,7 +481,7 @@ function pub(){
     q:q?{q:q.q,o:q.o,cat:q.cat,a:reveal?q.a:null}:null,
     alive:room.alive||[],active:room.active||[],scores:room.scores||{},outRound:room.outRound||{},results:reveal?room.results:null,events:room.events||[],final:!!room.final,winners:room.winners||null,
     players:Object.fromEntries(Object.entries(P).map(([id,p])=>[id,{n:p.name,on:!!p.online,j:p.joinedAt}])),
-    roundQ:room.roundQ||1,elimRound:room.elimRound||1,bench:room.bench||[],answered:room.status==="question"?(room.alive||[]).filter(id=>P[id]&&P[id].answers[k]):[],duelPick:room.duelPick||[],gameNo:room.gameNo,auto:!!room.auto};
+    roundQ:room.roundQ||1,elimRound:room.elimRound||1,bench:room.bench||[],paused:!!room.paused,pausedLeft:room.pausedLeft||0,resumeId:room.resumeId||0,leftAtResume:room.leftAtResume||0,answered:room.status==="question"?(room.alive||[]).filter(id=>P[id]&&P[id].answers[k]):[],duelPick:room.duelPick||[],gameNo:room.gameNo,auto:!!room.auto};
 }
 function changed(){
   S=pub();
@@ -491,7 +491,15 @@ function changed(){
   hostTick();render();
 }
 function set(patch){Object.assign(room,patch);changed()}
+function togglePause(){
+  if(room.status!=="question"&&room.status!=="reveal")return;
+  clearTimeout(hostT.q);clearTimeout(hostT.e);clearTimeout(hostT.r);hostT.qKey=hostT.eKey=hostT.rKey=null;
+  if(!room.paused){set({paused:true,pausedLeft:room.status==="question"?hostTimeLeft():0})}
+  else{const left=room.pausedLeft||0;
+    set({paused:false,qStartedAt:room.status==="question"?Date.now()-(room.timer*1000-left):room.qStartedAt,resumeId:(room.resumeId||0)+1,leftAtResume:left})}
+}
 function hostTick(){
+  if(room.paused)return;
   const k=qk();
   if(room.status==="question"){
     if(hostT.qKey!==k){clearTimeout(hostT.q);hostT.qKey=k;hostT.q=setTimeout(()=>closeQ(k),Math.max(0,room.qStartedAt+room.timer*1000+1200-Date.now()))}
@@ -534,7 +542,7 @@ async function startGame(){
   const m=room.mode,parts=participants(),active=m==="duel"?room.duelPick.filter(id=>parts.includes(id)):parts;
   const qs=buildPool(room.cats,room.custom,n,online,room.diff);
   set({status:"question",gameNo:(room.gameNo||0)+1,questions:qs,mainCount:Math.min(MAIN,qs.length),qIndex:0,round:1,qStartedAt:Date.now(),
-    active,alive:active.slice(),scores:Object.fromEntries(active.map(id=>[id,0])),outRound:{},results:null,events:[],final:false,winners:null,phase:"main",tb:0,roundQ:1,elimRound:1,bench:[],newRound:false});
+    active,alive:active.slice(),scores:Object.fromEntries(active.map(id=>[id,0])),outRound:{},results:null,events:[],final:false,winners:null,paused:false,phase:"main",tb:0,roundQ:1,elimRound:1,bench:[],newRound:false});
   markAsked();render();
 }
 function topOf(ids,sc){const t=Math.max(...ids.map(id=>sc[id]||0));return ids.filter(id=>(sc[id]||0)===t)}
@@ -595,7 +603,7 @@ function closeQ(k){
 }
 function nextQ(){if(room.status!=="reveal")return;clearTimeout(hostT.r);
   if(room.final){set({status:"done"});return}
-  const pat={status:"question",qIndex:room.qIndex+1,round:room.round+1,qStartedAt:Date.now(),results:null,events:[]};
+  const pat={paused:false,status:"question",qIndex:room.qIndex+1,round:room.round+1,qStartedAt:Date.now(),results:null,events:[]};
   if(room.mode==="elimination"){
     if(room.newRound){pat.roundQ=1;pat.elimRound=(room.elimRound||1)+1;pat.newRound=false;pat.bench=[]}
     else if(room.phase==="main")pat.roundQ=(room.roundQ||1)+1;
@@ -608,7 +616,7 @@ function endHost(){
   try{hostPeer&&hostPeer.destroy()}catch(e){}
   Object.values(hostT).forEach(v=>clearTimeout(v));hostT={};lsDel("qn_host");role=null;room=null;P={};S=null;render();
 }
-function hostTimeLeft(){return Math.max(0,room.qStartedAt+room.timer*1000-Date.now())}
+function hostTimeLeft(){return room.paused?(room.pausedLeft||0):Math.max(0,room.qStartedAt+room.timer*1000-Date.now())}
 
 // ---- host (TV) screens ----
 function hostLobby(){
@@ -644,13 +652,14 @@ function hostLobby(){
   </div>`;
 }
 function countLabel(t){const n=parseCustom(t).length;return n?`${n} custom question${n>1?"s":""} ready`:""}
-function hostCanPlay(){return !!(room.hostPlays&&P.host&&(room.alive||[]).includes("host")&&!P.host.answers[qk()])}
+function hostCanPlay(){return !!(!room.paused&&room.hostPlays&&P.host&&(room.alive||[]).includes("host")&&!P.host.answers[qk()])}
 function hostQuestion(){
   const left=hostTimeLeft();
   return `<div class="tv">
   <div class="qmeta"><span class="qnum">${qLabel()}</span><span class="tag">${MODES[S.mode].name}</span></div>
   <div class="timer"><div class="track"><div class="bar ${left<5000?"low":""}" id="tbar" style="transform:scaleX(${left/(S.timer*1000)})"></div></div><span class="secs" id="tnum">${Math.ceil(left/1000)}</span></div>
   <div class="label">${esc(S.q.cat)}</div>
+  ${S.paused?`<div class="status" style="font-family:var(--display);font-size:clamp(22px,3vw,40px);background:var(--accent);color:var(--accent-ink);border:0">Paused</div>`:""}
   <p class="qtext">${esc(S.q.q)}</p>
   <div class="opts">${S.q.o.map((o,i)=>hostCanPlay()?`<button class="opt o${i}" data-act="hans" data-v="${i}"><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></button>`:`<div class="opt o${i}"><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></div>`).join("")}</div>
   <div class="dots">${S.alive.map(id=>`<span class="dot ${S.answered.includes(id)?"in":""}">${esc(nm(id))}</span>`).join("")}</div>
@@ -677,8 +686,8 @@ function hostDone(){
 function hostDock(){
   const s=room.status;
   if(s==="lobby"){const p=startProblem();return `<button class="btn line" data-act="end">End</button><div class="info">${loadingQs?"<b>Loading questions…</b>":p?esc(p):`<b>${participants().length}</b> ready · ${MODES[room.mode].name}`}</div><button class="btn hot" data-act="start" ${p||loadingQs?"disabled":""}>${loadingQs?"Loading…":"Start game"}</button>`}
-  if(s==="question")return `<div class="info"><b>${S.answered.length}/${S.alive.length}</b> answered${room.hostPlays&&(room.alive||[]).includes("host")?(P.host&&P.host.answers[qk()]?" · you're locked in":" · tap an answer to play"):""}</div><button class="btn line" data-act="close">Reveal now</button>`;
-  if(s==="reveal")return `<div class="info">${room.final?"Game over":room.auto?"Next question in a few seconds":"Ready when you are"}</div><button class="btn hot" data-act="next">${room.final?"Final results":"Next question"}</button>`;
+  if(s==="question")return `<div class="info"><b>${S.answered.length}/${S.alive.length}</b> answered${room.hostPlays&&(room.alive||[]).includes("host")?(P.host&&P.host.answers[qk()]?" · you're locked in":" · tap an answer to play"):""}</div>${room.paused?"":`<button class="btn line" data-act="close">Reveal now</button>`}<button class="btn ${room.paused?"hot":"line"}" data-act="pause">${room.paused?"Resume":"Pause"}</button>`;
+  if(s==="reveal")return `<div class="info">${room.paused?"<b>Paused</b>":room.final?"Game over":room.auto?"Next question in a few seconds":"Ready when you are"}</div>${room.final?"":`<button class="btn ${room.paused?"hot":"line"}" data-act="pause">${room.paused?"Resume":"Pause"}</button>`}<button class="btn hot" data-act="next">${room.final?"Final results":"Next question"}</button>`;
   return `<button class="btn line" data-act="end">End</button><div class="info">Same players, new questions</div><button class="btn hot" data-act="lobby">Back to lobby</button>`;
 }
 
@@ -700,7 +709,8 @@ function onPlayerData(d){
     if(S&&s.epoch<S.epoch)return;
     if(S&&s.epoch===S.epoch&&s.seq<=S.seq){render();return}
     S=s;clearTimeout(connTimer);
-    if(S.status==="question"&&seen.k!==S.k){seen={k:S.k,t:performance.now()}}
+    if(S.status==="question"&&seen.k!==S.k){seen={k:S.k,t:performance.now(),r:S.resumeId}}
+    else if(S.status==="question"&&seen.r!==S.resumeId){seen.t=performance.now()-(S.timer*1000-S.leftAtResume);seen.r=S.resumeId}
     if(!S.players[myId])pSend({t:"join",name:myName});
     render();
   }
@@ -741,8 +751,8 @@ function leavePlayer(msg){
   relayEnd(pRelay);pRelay=[];
   homeErr=msg||"";render();
 }
-function pTimeLeft(){return S?Math.max(0,S.timer*1000-(performance.now()-seen.t)):0}
-function canAnswer(){return S&&S.status==="question"&&S.alive.includes(myId)&&picks[S.k]==null&&!S.answered.includes(myId)&&pTimeLeft()>0}
+function pTimeLeft(){return !S?0:S.paused?S.pausedLeft:Math.max(0,S.timer*1000-(performance.now()-seen.t))}
+function canAnswer(){return S&&S.status==="question"&&!S.paused&&S.alive.includes(myId)&&picks[S.k]==null&&!S.answered.includes(myId)&&pTimeLeft()>0}
 function answer(i){
   if(!canAnswer())return;
   if(!pLive()){toast("Reconnecting… try again in a second.");return}
@@ -768,6 +778,7 @@ function playerScreen(){
     const mine=picks[S.k]!=null?picks[S.k]:(S.answered.includes(myId)?-2:null),left=pTimeLeft();
     let st="";
     if(!alive)st=(S.bench||[]).includes(myId)?"You're safe. Sudden death for last place is on.":inGame?"You're out. Watch the TV.":"You joined mid-game. You'll play in the next one.";
+    else if(S.paused)st=mine!=null?"Locked in. Game paused by the host.":"Paused by the host. Hang tight.";
     else if(mine!=null)st="Locked in!";else if(left<=0)st="Time's up!";
     h+=`<div class="qmeta"><span class="qnum">${qLabel()}</span></div>
     <div class="timer"><div class="track"><div class="bar ${left<5000?"low":""}" id="tbar" style="transform:scaleX(${left/(S.timer*1000)})"></div></div><span class="secs" id="tnum">${Math.ceil(left/1000)}</span></div>
@@ -775,6 +786,7 @@ function playerScreen(){
     <div class="pad">${S.q.o.map((o,i)=>`<button class="opt o${i} ${mine===i?"mine":""} ${mine!=null&&mine!==i?"dim":""}" data-act="ans" data-v="${i}" ${canAnswer()?"":"disabled"}><span class="lt">${"ABCD"[i]}</span><span>${esc(o)}</span></button>`).join("")}</div>
     ${st?`<div class="status">${st}</div>`:""}`;
   }else if(S.status==="reveal"){
+    if(S.paused)h+=`<div class="status">Paused by the host</div>`;
     const me=S.results&&S.results[myId],rank=standings().indexOf(myId)+1;
     if(me){const outNow=(S.mode==="survivor"||S.mode==="elimination")&&(myId in S.outRound);
       if(me.ok)h+=`<div class="verdict good"><span class="label">Correct</span><span class="big">${S.mode==="duel"?(me.pts?"Point to you":"Right, but too slow"):"+"+me.pts.toLocaleString()}</span><span class="hint">Answered in ${(me.ms/1000).toFixed(1)}s</span>${outNow?`<span class="err">You're out</span>`:""}</div>`;
@@ -861,6 +873,7 @@ document.addEventListener("click",e=>{
   else if(a==="auto")set({auto:!room.auto});
   else if(a==="hostplay")setHostPlays(!room.hostPlays);
   else if(a==="hans")hostAnswer(+v);
+  else if(a==="pause")togglePause();
   else if(a==="online")set({online:room.online===false});
   else if(a==="diff")set({diff:v});
   else if(a==="pick"){let p=room.duelPick.slice();p=p.includes(v)?p.filter(x=>x!==v):[...p,v].slice(-2);set({duelPick:p})}
