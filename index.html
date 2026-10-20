@@ -167,9 +167,25 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
 <div class="dock" id="dock" hidden><div class="in" id="dockIn"></div></div>
 <div class="toast" id="toast" hidden></div>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+// Optional extras, each tried from several sites. The game works without them:
+// PeerJS = faster direct phone-to-phone link, qrcodejs = QR code in the lobby.
+(function(){
+  function load(urls,test,done){
+    if(test())return done&&done();
+    const u=urls.shift();if(!u)return;
+    const sc=document.createElement("script");sc.src=u;sc.async=true;
+    sc.onload=()=>test()?(done&&done()):load(urls,test,done);
+    sc.onerror=()=>load(urls,test,done);
+    document.head.appendChild(sc);
+  }
+  window.__extras={peer:false,qr:false};
+  load(["https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js","https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js","https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"],
+    ()=>typeof window.Peer==="function",()=>{window.__extras.peer=true;window.dispatchEvent(new Event("extras"))});
+  load(["https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js","https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js","https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"],
+    ()=>typeof window.QRCode==="function",()=>{window.__extras.qr=true;window.dispatchEvent(new Event("extras"))});
+})();
+</script>
 <script>
 // ---------- bilingual question bank: [category, "EN question|right|wrong|wrong|wrong", "FR question|right|wrong|wrong|wrong"] ----------
 const BANK_RAW = [
@@ -1171,7 +1187,7 @@ const MODES={
     elimination:{name:"Élimination",tag:"Manches de 10 questions, le dernier sort",rules:"Des manches de 10 questions, 1 point par bonne réponse. Après chaque manche, le plus bas pointage est éliminé, puis les pointages repartent à zéro pour une nouvelle manche avec les joueurs restants. Égalité au dernier rang? Une mort subite décide. Le dernier debout gagne."},
     duel:{name:"Duel 1 contre 1",tag:"Face à face, premier à 5",rules:"Deux joueurs s'affrontent pendant que les autres regardent. La bonne réponse la plus rapide remporte le point. Le premier à 5 gagne."}}
 };
-const ELIM_Q=10,MAIN=10,DUEL_TARGET=5,TIMERS=[10,15,20,30],PREFIX="officequiznight-",VERSION=6;
+const ELIM_Q=10,MAIN=10,DUEL_TARGET=5,TIMERS=[10,15,20,30],PREFIX="officequiznight-",VERSION=7;
 
 // ---------- words, in both languages ----------
 const STR={
@@ -1286,20 +1302,67 @@ function langSwitch(){return `<div class="langsw" role="group" aria-label="${t("
 
 // Backup route: public MQTT-over-WebSocket relays. Everyone connects to all of them; duplicates are ignored.
 const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt"],TOPIC="officequiznight26/";
+// Tiny MQTT 3.1.1 client over the browser's own WebSocket (QoS 0 only), so no outside script is needed.
+function MiniMqtt(url){
+  const enc=new TextEncoder(),dec=new TextDecoder(),h={},self={connected:false,closed:false,subs:[],ws:null};
+  self.on=(ev,f)=>{(h[ev]=h[ev]||[]).push(f);return self};
+  const emit=(ev,...a)=>(h[ev]||[]).forEach(f=>{try{f(...a)}catch(e){}});
+  const cat=parts=>{let n=0;parts.forEach(p=>n+=p.length);const o=new Uint8Array(n);let i=0;parts.forEach(p=>{o.set(p,i);i+=p.length});return o};
+  const vlen=n=>{const o=[];do{let x=n%128;n=Math.floor(n/128);if(n>0)x|=128;o.push(x)}while(n>0);return new Uint8Array(o)};
+  const mstr=x=>{const b=enc.encode(x);return cat([new Uint8Array([b.length>>8,b.length&255]),b])};
+  const pkt=(first,body)=>cat([new Uint8Array([first]),vlen(body.length),body]);
+  let pid=1,ping=null,retry=null,ackT=null;
+  function send(p){try{if(self.ws&&self.ws.readyState===1)self.ws.send(p)}catch(e){}}
+  function sub(topic){const id=(pid++%65535)+1;send(pkt(0x82,cat([new Uint8Array([id>>8,id&255]),mstr(topic),new Uint8Array([0])])))}
+  function schedule(){if(self.closed)return;clearTimeout(retry);retry=setTimeout(open,4000)}
+  function open(){
+    if(self.closed)return;
+    let ws;try{ws=new WebSocket(url,["mqtt"])}catch(e){schedule();return}
+    self.ws=ws;ws.binaryType="arraybuffer";let buf=new Uint8Array(0);
+    ws.onopen=()=>{
+      const cid="oqn_"+Math.random().toString(36).slice(2,12);
+      send(pkt(0x10,cat([mstr("MQTT"),new Uint8Array([4,0x02,0,30]),mstr(cid)]))); // MQTT 3.1.1, clean session, keepalive 30 s
+      clearTimeout(ackT);ackT=setTimeout(()=>{if(!self.connected)try{ws.close()}catch(e){}},10000);
+    };
+    ws.onmessage=ev=>{
+      if(typeof ev.data==="string")return;
+      buf=cat([buf,new Uint8Array(ev.data)]);
+      for(;;){
+        if(buf.length<2)return;
+        let mult=1,len=0,i=1,x;
+        do{if(i>=buf.length)return;x=buf[i++];len+=(x&127)*mult;mult*=128}while(x&128);
+        if(buf.length<i+len)return;
+        const first=buf[0],type=first>>4,body=buf.slice(i,i+len);buf=buf.slice(i+len);
+        if(type===2){ // CONNACK
+          clearTimeout(ackT);
+          if(body[1]===0){self.connected=true;self.subs.forEach(sub);clearInterval(ping);ping=setInterval(()=>send(new Uint8Array([0xC0,0])),20000);emit("connect")}
+          else try{ws.close()}catch(e){}
+        }else if(type===3){ // PUBLISH
+          const tl=(body[0]<<8)|body[1],qos=(first>>1)&3,topic=dec.decode(body.slice(2,2+tl));
+          let p=2+tl;if(qos>0){const mid=[body[p],body[p+1]];p+=2;if(qos===1)send(new Uint8Array([0x40,2,mid[0],mid[1]]))}
+          emit("message",topic,dec.decode(body.slice(p)));
+        }
+      }
+    };
+    ws.onclose=()=>{const was=self.connected;self.connected=false;clearInterval(ping);clearTimeout(ackT);if(was)emit("close");schedule()};
+    ws.onerror=()=>{try{ws.close()}catch(e){}};
+  }
+  self.subscribe=topic=>{if(!self.subs.includes(topic))self.subs.push(topic);if(self.connected)sub(topic)};
+  self.publish=(topic,text)=>{if(self.connected)send(pkt(0x30,cat([mstr(topic),enc.encode(text)])))};
+  self.end=()=>{self.closed=true;clearInterval(ping);clearTimeout(retry);clearTimeout(ackT);if(self.connected)send(new Uint8Array([0xE0,0]));try{self.ws&&self.ws.close()}catch(e){}};
+  open();return self;
+}
 function relayConnect(subTopics,onMsg){
-  const list=[];
-  if(!window.mqtt)return list;
-  BROKERS.forEach(url=>{try{
-    const c=mqtt.connect(url,{clientId:"oqn_"+Math.random().toString(36).slice(2,12),reconnectPeriod:4000,connectTimeout:10000,clean:true,keepalive:30});
-    c.on("connect",()=>subTopics.forEach(t=>c.subscribe(t)));
-    c.on("message",(t,buf)=>{let d;try{d=JSON.parse(buf.toString())}catch(e){return}onMsg(d,t)});
-    c.on("error",()=>{});
-    list.push(c);
-  }catch(e){}});
-  return list;
+  if(typeof WebSocket!=="function")return[];
+  return (window.__RELAYS||BROKERS).map(url=>{
+    const c=MiniMqtt(url);
+    subTopics.forEach(tp=>c.subscribe(tp));
+    c.on("message",(tp,text)=>{let d;try{d=JSON.parse(text)}catch(e){return}onMsg(d,tp)});
+    return c;
+  });
 }
 function relayPub(list,topic,obj){const s=JSON.stringify(obj);list.forEach(c=>{try{if(c.connected)c.publish(topic,s)}catch(e){}})}
-function relayEnd(list){list.forEach(c=>{try{c.end(true)}catch(e){}})}
+function relayEnd(list){list.forEach(c=>{try{c.end()}catch(e){}})}
 
 // ---------- shared helpers ----------
 const $=s=>document.querySelector(s);
@@ -1312,7 +1375,7 @@ let toastT;function toast(m){const el=$("#toast");el.textContent=m;el.hidden=fal
 function genCode(){const L="ABCDEFGHJKLMNPQRSTUVWXYZ";let s="";for(let i=0;i<4;i++)s+=L[Math.floor(Math.random()*L.length)];return s}
 function tiles(c){return `<div class="tiles" aria-label="${c}">${c.split("").map(ch=>`<div class="tile">${ch}</div>`).join("")}</div>`}
 function joinUrl(code){return location.origin+location.pathname+"?room="+code}
-const libsOk=()=>typeof window.Peer==="function"||!!window.mqtt;
+const libsOk=()=>typeof WebSocket==="function";
 
 let role=null; // null | 'host' | 'player'
 let S=null;    // public game state (host builds it, players receive it)
@@ -1809,7 +1872,7 @@ function answer(i){
 function pHeader(){return `<div class="top"><div class="brand"><div class="bulb">?</div><h1>Quiz Night</h1></div><div class="topr">${langSwitch()}<span class="conn ${pLive()?"":"warn"}">${pLive()?esc(myName)+" · "+esc(pCode):t("reconnecting")}</span></div></div>`}
 function diagText(){
   const rOk=pRelay.filter(c=>c.connected).length;
-  return `${t("relay")}: ${window.mqtt?t("ofN",rOk,pRelay.length):t("notLoaded")} · ${t("direct")}: ${esc(pDirect)} · v${VERSION}`;
+  return `${t("relay")}: ${typeof WebSocket==="function"?t("ofN",rOk,pRelay.length):t("notLoaded")} · ${t("direct")}: ${esc(pDirect)} · v${VERSION}`;
 }
 function playerScreen(){
   nmL=lang;
@@ -1868,7 +1931,7 @@ function homeScreen(){
   <div class="panel">
     <p class="hint">${t("hostHint")}</p>
     <button class="btn" data-act="host">${t("hostNew")}</button>
-    <p class="hint" style="font-size:12px">${t("versionLine",window.mqtt?t("ready"):t("notLoaded"),window.Peer?t("ready"):t("notLoaded"))}</p>
+    <p class="hint" style="font-size:12px">${t("versionLine",typeof WebSocket==="function"?t("ready"):t("notLoaded"),window.Peer?t("ready"):t("notLoaded"))}</p>
     ${canResume?`<button class="btn line" data-act="resume">${t("resumeHost",esc(saved.room.code))}</button>`:""}
   </div></div>`;
 }
@@ -1951,6 +2014,7 @@ setInterval(()=>{
   if(num)num.textContent=Math.ceil(left/1000);
   if(role==="player"&&left<=0&&expiredKey!==S.k){expiredKey=S.k;render()}
 },100);
+window.addEventListener("extras",()=>{if(!role||(role==="host"&&room&&room.status==="lobby"))render()});
 window.addEventListener("beforeunload",e=>{if(role==="host"&&room&&room.status!=="lobby"){e.preventDefault();e.returnValue=""}});
 render();
 </script>
